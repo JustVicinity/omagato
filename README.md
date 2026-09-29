@@ -17,7 +17,7 @@ omarchy plugin add https://github.com/JustVicinity/omagato
 ~/.config/omarchy/plugins/io.github.justvicinity.omagato/install.sh
 ```
 
-The installer creates a Python environment and starts OmaGato's user service. You need Python 3 with `venv` and `pip`. Some functions use optional system tools: `v4l2-ctl` for cameras, `avahi-browse` for light discovery, and `wpctl` for audio. Media keys use `playerctl` when available or the system MPRIS bus. A physical Prompter needs a working display connection under Hyprland.
+The installer creates a Python environment and starts OmaGato's user service. You need Python 3 with `venv` and `pip`; Python packages are listed in `requirements.txt`. Some functions use optional system tools: `v4l2-ctl` for cameras, `avahi-browse` for light discovery, `pw-dump` and `wpctl` for audio, and `rsvg-convert` for custom SVG app icons. Media keys use `playerctl` when available or the system MPRIS bus. A physical Prompter needs a working display connection under Hyprland.
 
 If a Stream Deck is detected but cannot be opened, run `./setup-usb-access.sh` from the plugin directory to install the included USB access rule. That step asks for `sudo`.
 
