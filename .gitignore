@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+config.json
+status.json
+daemon.log
+daemon.lock
+prompter-scripts/
+*.bak
+*.tmp

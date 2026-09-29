@@ -1,0 +1,1 @@
+"""Omarchy Elgato hardware integration."""

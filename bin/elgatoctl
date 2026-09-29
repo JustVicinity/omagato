@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+plugin_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$plugin_dir"
+venv_dir="${XDG_DATA_HOME:-$HOME/.local/share}/omagato/venv"
+if [[ -x "$venv_dir/bin/python" ]]; then
+  exec "$venv_dir/bin/python" -m elgato "$@"
+fi
+if [[ -x "$plugin_dir/.venv/bin/python" ]]; then
+  exec "$plugin_dir/.venv/bin/python" -m elgato "$@"
+fi
+exec python3 -m elgato "$@"

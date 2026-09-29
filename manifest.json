@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.justvicinity.omagato",
+  "name": "OmaGato",
+  "version": "0.7.0",
+  "author": "JustVicinity and contributors",
+  "license": "MIT",
+  "description": "Elgato Geräte erkennen und Stream Deck, Licht, Kamera und Audio im Omarchy Stil steuern.",
+  "kinds": ["service", "bar-widget"],
+  "keepLoaded": true,
+  "entryPoints": {"service": "PrompterService.qml", "barWidget": "BarWidget.qml"},
+  "barWidget": {
+    "displayName": "OmaGato",
+    "description": "Stream Deck, Beleuchtung, Kamera und Audio",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
