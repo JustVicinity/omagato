@@ -2,6 +2,8 @@
 
 Control your Elgato setup from the Omarchy bar. OmaGato brings Stream Deck keys, lights, cameras, audio, and a teleprompter into one panel that follows your Omarchy theme.
 
+![OmaGato showing a connected Stream Deck MK.2](preview.png)
+
 ## Highlights
 
 - Stream Deck: Click + to assign an installed app or system action to a key. Add scripts, websites, media controls, macros, and pages. Right click a key to clear it with confirmation.
