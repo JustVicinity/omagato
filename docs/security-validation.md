@@ -31,7 +31,7 @@ Checked on Linux with Python 3.14.7, Pillow 12.3.0 and streamdeck 0.10.0 in an i
 - ShellCheck 0.11.0 and `bash -n` passed for installation/removal/USB/bootstrap scripts. Python compilation and `git diff --check` passed.
 - `systemd-analyze --user verify` passed for the generated unit with ExecStart substituted by `/usr/bin/true` solely for syntax checking. No service was installed or started.
 
-The CI matrix is configured for Python 3.11–3.14; only 3.14 was run locally. Remote GitHub Actions has not run on this unpublished change. CI's optional renderer test skips when librsvg is absent; it ran locally.
+The CI matrix is configured for Python 3.11–3.14; only 3.14 was run locally. At the time of local validation, remote GitHub Actions had not run on the change. Its results are recorded separately in the repository's Actions runs. CI's optional renderer test skips when librsvg is absent; it ran locally.
 
 ## Software acceptance for the security release
 
@@ -54,6 +54,6 @@ When devices or community reports become available, check:
 
 Install/update/uninstall checks on Omarchy remain useful independently of having Elgato hardware. The service's inherited memory/task limits may also affect user-configured applications and scripts; document any needed user-unit overrides rather than asserting that those workloads were tested.
 
-Enable GitHub private vulnerability reporting in repository settings if it is not already enabled. This setting and the actual release/marketplace response require repository-owner actions; no account settings, remote branch, issue or release were modified here.
+Enable GitHub private vulnerability reporting in repository settings if it is not already enabled. This setting and the actual release/marketplace response require repository-owner actions; local validation itself did not modify account settings, remote branches, issues or releases.
 
 Configured scripts/apps still run as trusted user code. Same-UID software cannot be isolated by the TCP UID check. Light HTTP is unencrypted. These constraints are explicit in SECURITY.md; the implementation does not claim a complete sandbox or a security certification.

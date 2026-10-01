@@ -23,7 +23,10 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python }}
-      - run: PIP_CONFIG_FILE=/dev/null python -m pip --isolated install --index-url https://pypi.org/simple --require-hashes --only-binary=:all: -r requirements.txt
+      - run: |
+          PIP_CONFIG_FILE=/dev/null python -m pip --isolated install \
+            --index-url https://pypi.org/simple --require-hashes \
+            --only-binary=:all: -r requirements.txt
       - run: python -m unittest discover -s tests
       - run: bash -n install.sh uninstall.sh setup-usb-access.sh scripts/path-guards.sh
       - run: shellcheck install.sh uninstall.sh setup-usb-access.sh scripts/path-guards.sh bin/elgatoctl
