@@ -1,14 +1,18 @@
 """Persistent Stream Deck HID worker. One process owns the USB device."""
 from __future__ import annotations
 
+from collections import deque
 import fcntl
+import os
+import stat
 import json
 import logging
 from pathlib import Path
 import threading
 import time
 
-from . import core, visuals
+from . import core, safety, visuals
+from .actions import ActionQueue
 
 LOG = logging.getLogger(__name__)
 
@@ -35,7 +39,7 @@ def render(deck, action, colors, config, empty_spec=None):
     image = Image.new('RGB', (width, height), base_color)
     if path:
         try:
-            with Image.open(path) as source:
+            with visuals.open_image(path) as source:
                 fitted = ImageOps.fit(source.convert('RGB'), (width, height), method=Image.Resampling.LANCZOS)
                 image.paste(fitted)
         except (OSError, ValueError):
@@ -85,27 +89,30 @@ class Worker:
         self.theme_mtime = None
         self.theme_name_mtime = None
         self.background_signature = None
-        self.errors = []
+        self.errors = deque(maxlen=32)
+        self.last_error_log = 0
+        self.last_keys = {}
+        self.actions = ActionQueue(self.record_error)
         self.lock = threading.RLock()
 
     def write_status(self):
-        core.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        safety.private_dir(core.CONFIG_DIR)
         data = {'running': True, 'updated': time.time(), 'decks': [
             {'id': key, 'name': device_name(deck), 'keys': deck.key_count(),
              'rows': deck.key_layout()[0], 'columns': deck.key_layout()[1], 'dials': deck.dial_count()}
             for key, deck in self.decks.items()], 'page': self.page,
-            'errors': self.errors[-4:]}
-        STATUS_FILE.write_text(json.dumps(data))
+            'errors': list(self.errors)[-4:]}
+        safety.atomic_write(STATUS_FILE, json.dumps(data).encode())
 
     def scan(self):
         from StreamDeck.DeviceManager import DeviceManager
         try:
             devices = DeviceManager().enumerate()
         except Exception as exc:
-            self.errors.append(f'USB: {exc}')
+            self.record_error(f'USB: {exc}')
             return
         current = set()
-        for deck in devices:
+        for deck in devices[:8]:
             try:
                 ident = deck.id()
                 current.add(ident)
@@ -122,7 +129,7 @@ class Worker:
                 if deck.is_visual():
                     self.paint(deck)
             except Exception as exc:
-                self.errors.append(f'Stream Deck: {exc}')
+                self.record_error(f'Stream Deck: {exc}')
                 try:
                     deck.close()
                 except Exception:
@@ -149,7 +156,7 @@ class Worker:
                         spec = visuals.empty_for(self.config, self.page, index)
                         deck.set_key_image(index, render(deck, {}, colors, self.config, spec))
                 except Exception as exc:
-                    self.errors.append(f'Kachel {index + 1}: {exc}')
+                    self.record_error(f'Kachel {index + 1}: {exc}')
                     break
 
     def on_key(self, deck, key, pressed):
@@ -169,7 +176,15 @@ class Worker:
                 except (ValueError, TypeError):
                     pass
                 return
-        threading.Thread(target=self.execute, args=(action,), daemon=True).start()
+        ident = (deck.id(), key)
+        now = time.monotonic()
+        if now - self.last_keys.get(ident, -1) < 0.15:
+            return
+        if len(self.last_keys) > 512:
+            self.last_keys.clear()
+        self.last_keys[ident] = now
+        if not self.actions.submit(('key', *ident), lambda: self.execute(action)):
+            self.record_error('Action queue is busy')
 
     def on_dial(self, deck, index, event, value):
         from StreamDeck.Devices.StreamDeck import DialEventType
@@ -180,10 +195,18 @@ class Worker:
         if event == DialEventType.PUSH and value:
             return
         amount = int(value) if event == DialEventType.TURN else 0
-        def apply():
+        is_turn = event == DialEventType.TURN
+        def apply(amount):
+            if is_turn and not amount:
+                return
             try:
                 if mode == 'volume':
-                    core.run_action({'type': 'volume', 'value': 'mute' if not amount else ('up' if amount > 0 else 'down')})
+                    if not amount:
+                        core.run_action({'type': 'volume', 'value': 'mute'})
+                    else:
+                        delta = f'{abs(amount) * 5}%' + ('+' if amount > 0 else '-')
+                        core._launch(['wpctl', 'set-volume', '--limit', '1.5', '@DEFAULT_AUDIO_SINK@', delta],
+                                     start_new_session=True)
                 elif mode.startswith('light-'):
                     host = setting.get('host', '')
                     if not amount:
@@ -194,20 +217,35 @@ class Worker:
                         core.set_light(host, **{field: int(current.get(field, 50 if field == 'brightness' else 250)) + amount * 5})
             except Exception as exc:
                 with self.lock:
-                    self.errors.append(str(exc))
-        threading.Thread(target=apply, daemon=True).start()
+                    self.record_error(str(exc))
+        ident = ('dial', deck.id(), index, 'turn' if is_turn else 'push')
+        if not self.actions.submit(ident, apply, max(-100, min(100, amount)), coalesce=is_turn):
+            self.record_error('Action queue is busy')
+
+    def record_error(self, message):
+        with self.lock:
+            message = ''.join(char if char >= ' ' else ' ' for char in str(message)[:240])
+            self.errors.append(message)
+            now = time.monotonic()
+            if now - self.last_error_log >= 30:
+                LOG.warning('Controller error: %s', message)
+                self.last_error_log = now
 
     def execute(self, action):
         try:
             core.run_action(action, self.config)
         except Exception as exc:
-            LOG.exception('Action failed')
             with self.lock:
-                self.errors.append(str(exc))
+                self.record_error(str(exc))
 
     def loop(self):
-        core.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        with LOCK_FILE.open('w') as lock:
+        safety.private_dir(core.CONFIG_DIR)
+        fd = os.open(LOCK_FILE, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        with os.fdopen(fd, 'w') as lock:
+            info = os.fstat(lock.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+                raise ValueError('Unsafe controller lock file')
+            os.fchmod(lock.fileno(), 0o600)
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
@@ -235,8 +273,7 @@ class Worker:
                         self.scan()
                         self.write_status()
                     except Exception as exc:
-                        LOG.exception('Worker loop failed')
-                        self.errors.append(str(exc))
+                        self.record_error(str(exc))
                 time.sleep(2)
 
 

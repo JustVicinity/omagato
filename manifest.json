@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.justvicinity.omagato",
   "name": "OmaGato",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "author": "JustVicinity and contributors",
   "license": "MIT",
   "description": "Elgato Geräte erkennen und Stream Deck, Licht, Kamera und Audio im Omarchy Stil steuern.",

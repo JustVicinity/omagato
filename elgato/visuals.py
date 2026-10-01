@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from io import BytesIO
 import json
 import os
 from pathlib import Path
@@ -9,8 +10,10 @@ from functools import lru_cache
 import re
 import subprocess
 import tempfile
+import sys
+import warnings
 
-from . import core
+from . import core, safety
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / 'assets' / 'icon-themes'
@@ -20,6 +23,28 @@ THEME_NAME_FILE = Path.home() / '.local/state/omarchy/current/theme.name'
 WALLPAPER_FILE = Path.home() / '.local/state/omarchy/current/background'
 CACHE_DIR = Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'omagato' / 'icons'
 DEFAULT_EMPTY = {'style': 'theme', 'icon': 'blank', 'label': ''}
+IMAGE_LIMIT = 10 * 1024 * 1024
+PIXEL_LIMIT = 16_000_000
+
+
+def open_image(path):
+    """Decode one bounded snapshot, checking dimensions before allocation."""
+    return decode_image(safety.read_bytes(path, IMAGE_LIMIT, nofollow=False))
+
+
+def decode_image(data):
+    from PIL import Image, ImageOps
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', Image.DecompressionBombWarning)
+            with Image.open(BytesIO(data)) as image:
+                if image.format not in ('PNG', 'JPEG', 'WEBP'):
+                    raise ValueError('Use a PNG, JPEG or WebP image')
+                if image.width > 8192 or image.height > 8192 or image.width * image.height > PIXEL_LIMIT:
+                    raise ValueError('Image dimensions are too large (maximum 16 megapixels)')
+                return ImageOps.exif_transpose(image)
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+        raise ValueError('Image dimensions are too large') from exc
 
 
 def resolve_theme(config, palette=None):
@@ -84,23 +109,18 @@ def imported_icon(path):
 
 
 def import_icon(path):
-    from PIL import Image, ImageOps
-
     source = Path(path).expanduser()
-    if not source.is_file() or source.stat().st_size > 10 * 1024 * 1024:
-        raise ValueError('Image missing or larger than 10 MB')
-    with Image.open(source) as image:
-        if image.format not in ('PNG', 'JPEG', 'WEBP'):
-            raise ValueError('Use a PNG, JPEG or WebP image')
-        image = ImageOps.exif_transpose(image)
+    snapshot = safety.read_bytes(source, IMAGE_LIMIT, nofollow=False)
+    with decode_image(snapshot) as image:
         image.thumbnail((512, 512))
         converted = image.convert('RGBA')
         store = core.CONFIG_DIR / 'icons'
-        store.mkdir(parents=True, exist_ok=True)
-        digest = hashlib.sha256(source.read_bytes()).hexdigest()[:20]
+        safety.private_dir(store)
+        digest = hashlib.sha256(snapshot).hexdigest()[:20]
         target = store / f'{digest}.png'
-        if not target.exists():
-            converted.save(target, 'PNG')
+        output = BytesIO()
+        converted.save(output, 'PNG')
+        safety.atomic_write(target, output.getvalue())
         return str(target)
 
 
@@ -186,12 +206,15 @@ def styled_app_icon(action, theme):
     if source:
         try:
             if source.suffix.lower() == '.svg':
-                svg_png = subprocess.run(['rsvg-convert', '-w', '256', '-h', '256', str(source)],
-                                         check=True, capture_output=True, timeout=5).stdout
-                from io import BytesIO
-                logo = Image.open(BytesIO(svg_png)).convert('RGBA')
+                renderer = core.shutil_which('rsvg-convert')
+                if not renderer:
+                    raise ValueError('SVG renderer unavailable')
+                svg_png = subprocess.run([sys.executable, '-I', str(Path(__file__).with_name('svg_worker.py')), renderer],
+                                         input=safety.read_bytes(source, IMAGE_LIMIT, nofollow=False),
+                                         check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5).stdout
+                logo = decode_image(svg_png).convert('RGBA')
             else:
-                with Image.open(source) as image:
+                with open_image(source) as image:
                     logo = image.convert('RGBA')
         except (OSError, ValueError, subprocess.SubprocessError):
             pass
@@ -212,7 +235,7 @@ def styled_app_icon(action, theme):
                 pass
         font = font or ImageFont.load_default(size=52)
         draw.text((72, 76), mark, anchor='mm', font=font, fill='#ffffff', stroke_width=1)
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    safety.private_dir(CACHE_DIR)
     fd, temporary = tempfile.mkstemp(prefix='.tile-', suffix='.png', dir=CACHE_DIR)
     os.close(fd)
     try:

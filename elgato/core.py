@@ -1,6 +1,7 @@
 """Configuration, actions and discovery for the Omarchy Elgato plugin."""
 from __future__ import annotations
 
+from collections import deque
 import configparser
 import json
 import os
@@ -8,9 +9,11 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
-import tempfile
+import ipaddress
 import tomllib
-from urllib.request import Request, urlopen
+import threading
+import time
+from . import network, safety
 
 CONFIG_DIR = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'omarchy-elgato'
 CONFIG_FILE = CONFIG_DIR / 'config.json'
@@ -26,28 +29,104 @@ def default_config():
 def load_config():
     if not CONFIG_FILE.exists():
         return default_config()
-    data = json.loads(CONFIG_FILE.read_text())
-    if data.get('version') != 1 or not isinstance(data.get('pages'), list) or not data['pages']:
+    data = safety.parse_json(safety.read_bytes(CONFIG_FILE, safety.CONFIG_LIMIT))
+    if not isinstance(data, dict) or data.get('version') != 1 or not isinstance(data.get('pages'), list) or not data['pages']:
         raise ValueError('Ungültige Konfiguration')
     defaults = default_config()
     for key in ('lights', 'dials', 'language', 'icon_theme', 'empty_default'):
         data.setdefault(key, defaults[key])
+    validate_config(data)
     return data
 
 
 def save_config(data):
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(prefix='.config-', dir=CONFIG_DIR)
-    try:
-        with os.fdopen(fd, 'w') as stream:
-            json.dump(data, stream, ensure_ascii=False, indent=2)
-            stream.write('\n')
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(name, CONFIG_FILE)
-    finally:
-        if os.path.exists(name):
-            os.unlink(name)
+    validate_config(data)
+    encoded = (json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False) + '\n').encode()
+    if len(encoded) > safety.CONFIG_LIMIT:
+        raise ValueError('Configuration is too large')
+    safety.atomic_write(CONFIG_FILE, encoded)
+
+
+def validate_action(action, *, in_macro=False):
+    safety.object_value(action)
+    kind = action.get('type')
+    if kind not in ('app', 'script', 'command', 'url', 'media', 'volume', 'workspace',
+                    'light', 'camera', 'prompter', 'page', 'multi'):
+        raise ValueError('Ungültige Aktion')
+    if len(json.dumps(action, allow_nan=False).encode()) > 8192:
+        raise ValueError('Aktion ist zu groß')
+    for field, limit in (('value', 4096), ('label', 80), ('icon', 1024), ('system_icon', 1024)):
+        if field in action:
+            safety.text_value(action[field], limit, field=f'action.{field}')
+    if kind == 'light':
+        validate_light(action.get('host', ''))
+    if kind == 'multi':
+        if in_macro:
+            raise ValueError('Verschachtelte Makros sind nicht erlaubt')
+        steps = action.get('steps', [])
+        if not isinstance(steps, list) or not 1 <= len(steps) <= 12:
+            raise ValueError('Maximal 12 Aktionen pro Makro')
+        for step in steps:
+            validate_action(step, in_macro=True)
+    if in_macro and kind == 'page':
+        raise ValueError('Seitenwechsel im Makro sind nicht erlaubt')
+    return action
+
+
+def validate_config(data):
+    safety.object_value(data)
+    pages = data.get('pages')
+    if data.get('version') != 1 or not isinstance(pages, list) or not 1 <= len(pages) <= 16:
+        raise ValueError('Ungültige Konfiguration')
+    safety.number_value(data.get('brightness', 70), 0, 100)
+    for page in pages:
+        safety.object_value(page)
+        safety.text_value(page.get('name', ''), 80, field='page.name')
+        keys = safety.object_value(page.get('keys', {}))
+        empty = safety.object_value(page.get('empty', {}))
+        for mapping in (keys, empty):
+            if len(mapping) > 64 or any(not key.isdecimal() or not 0 <= int(key) < 64 for key in mapping):
+                raise ValueError('Ungültige Taste')
+        for action in keys.values():
+            validate_action(action)
+        for spec in empty.values():
+            safety.object_value(spec)
+    lights = data.get('lights', [])
+    if not isinstance(lights, list) or len(lights) > 16:
+        raise ValueError('Maximal 16 Leuchten')
+    for light in lights:
+        safety.object_value(light)
+        validate_light(light.get('host', ''))
+        safety.text_value(light.get('name', ''), 240, field='light.name')
+    dials = safety.object_value(data.get('dials', {}))
+    if len(dials) > 8:
+        raise ValueError('Maximal 8 Drehregler')
+    for key, setting in dials.items():
+        if not key.isdecimal() or not 0 <= int(key) < 8:
+            raise ValueError('Ungültiger Drehregler')
+        safety.object_value(setting)
+        if setting.get('mode') not in ('none', 'volume', 'light-brightness', 'light-temperature'):
+            raise ValueError('Ungültiger Drehregler')
+        if setting.get('mode', '').startswith('light-'):
+            validate_light(setting.get('host', ''))
+    empty_specs = [data.get('empty_default', {}),
+                   *(spec for page in pages for spec in page.get('empty', {}).values())]
+    for spec in empty_specs:
+        safety.object_value(spec)
+        if spec.get('style', 'theme') not in ('theme', 'wallpaper', 'black', 'accent', 'image'):
+            raise ValueError('Invalid empty-key style')
+        for field, limit in (('label', 40), ('icon', 80), ('image', 4096)):
+            if field in spec:
+                safety.text_value(spec[field], limit, field=f'empty.{field}')
+    settings = safety.object_value(data.get('prompter', {}))
+    for field in ('screen', 'source', 'script'):
+        if field in settings:
+            safety.text_value(settings[field], 240, field=f'prompter.{field}')
+    for field, low, high in (('speed', 10, 300), ('font_size', 20, 90)):
+        if field in settings:
+            safety.number_value(settings[field], low, high)
+    if 'flip' in settings and type(settings['flip']) is not bool:
+        raise ValueError('Invalid Prompter flip setting')
 
 
 def palette():
@@ -202,58 +281,70 @@ def set_camera(node, control, value):
 
 
 def validate_light(host):
-    # An IP or .local name only. Avoid using URL schemes and arbitrary ports.
-    if not re.fullmatch(r'[a-zA-Z0-9.-]+', host) or host.startswith('-') or '..' in host:
+    if not isinstance(host, str) or not host or len(host) > 253:
         raise ValueError('Ungültige Licht-Adresse')
+    if '%' in host and not re.fullmatch(r'[A-Za-z0-9_.-]{1,64}', host.split('%', 1)[1]):
+        raise ValueError('Invalid IPv6 scope')
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        if not host.endswith('.local') or not all(re.fullmatch(r'[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?', label)
+                                                  for label in host.split('.')):
+            raise ValueError('Use a canonical IP address or a .local name') from None
+        return host
+    if str(address) != host or address.is_loopback or address.is_unspecified or address.is_multicast or address.is_reserved:
+        raise ValueError('Unsafe or non-canonical light address')
     return host
 
 
+def _light_http(host, path, method='GET', payload=None):
+    return network.request(validate_light(host), 9123, '/elgato/' + path, method=method,
+                           payload=payload, headers={'Content-Type': 'application/json', 'Accept': 'application/json'})
+
+
 def light_request(host, method='GET', payload=None):
-    host = validate_light(host)
-    data = json.dumps(payload).encode() if payload is not None else None
-    request = Request(f'http://{host}:9123/elgato/lights', data=data, method=method,
-                      headers={'Content-Type': 'application/json'})
-    with urlopen(request, timeout=2) as response:
-        return json.load(response)
+    result = safety.object_value(safety.parse_json(_light_http(host, 'lights', method, payload)))
+    lights = result.get('lights')
+    if not isinstance(lights, list) or not 1 <= len(lights) <= 8:
+        raise ValueError('Invalid light response')
+    clean = []
+    for light in lights:
+        safety.object_value(light)
+        item = {}
+        for field, minimum, maximum in (('on', 0, 1), ('brightness', 0, 100), ('temperature', 143, 344)):
+            if field in light:
+                item[field] = safety.number_value(light[field], minimum, maximum)
+        if 'on' not in item:
+            raise ValueError('Invalid light state')
+        clean.append(item)
+    return {'numberOfLights': len(clean), 'lights': clean}
 
 
 def light_state(host):
-    data = light_request(host)
-    lights = data.get('lights') or []
-    if not lights:
-        raise ValueError('Keine Leuchte an dieser Adresse')
-    return lights[0]
+    return light_request(host)['lights'][0]
 
 
 def light_info(host):
-    host = validate_light(host)
-    request = Request(f'http://{host}:9123/elgato/accessory-info',
-                      headers={'Accept': 'application/json'})
-    with urlopen(request, timeout=2) as response:
-        return json.load(response)
+    result = safety.object_value(safety.parse_json(_light_http(host, 'accessory-info')))
+    for field in ('displayName', 'productName', 'serialNumber', 'firmwareVersion'):
+        if field in result and not isinstance(result[field], (int, float)):
+            safety.text_value(result[field])
+    return result
 
 
 def rename_light(host, name):
-    host = validate_light(host)
-    name = str(name).strip()
-    if not name or len(name) > 64:
+    name = safety.text_value(name, 64).strip()
+    if not name:
         raise ValueError('Lichtname muss 1 bis 64 Zeichen lang sein')
-    request = Request(f'http://{host}:9123/elgato/accessory-info',
-                      data=json.dumps({'displayName': name}).encode(), method='PUT',
-                      headers={'Content-Type': 'application/json'})
-    with urlopen(request, timeout=2) as response:
-        response.read()
+    _light_http(host, 'accessory-info', 'PUT', {'displayName': name})
 
 
 def identify_light(host):
-    host = validate_light(host)
-    request = Request(f'http://{host}:9123/elgato/identify', data=b'', method='POST')
-    with urlopen(request, timeout=2) as response:
-        response.read()
+    _light_http(host, 'identify', 'POST')
 
 
 def set_light(host, *, on=None, brightness=None, temperature=None):
-    current = light_state(host)
+    current = {key: value for key, value in light_state(host).items() if key in ('on', 'brightness', 'temperature')}
     if on is not None:
         current['on'] = int(bool(on))
     if brightness is not None:
@@ -285,13 +376,32 @@ def shutil_which(name):
     return which(name)
 
 
+_LAUNCH_LOCK = threading.Lock()
+_CHILDREN = []
+_LAUNCH_TIMES = deque()
+
+
+def _launch(argv, **kwargs):
+    with _LAUNCH_LOCK:
+        _CHILDREN[:] = [child for child in _CHILDREN if child.poll() is None]
+        now = time.monotonic()
+        while _LAUNCH_TIMES and now - _LAUNCH_TIMES[0] > 1:
+            _LAUNCH_TIMES.popleft()
+        if len(_CHILDREN) >= 32 or len(_LAUNCH_TIMES) >= 20:
+            raise ValueError('Too many running actions; try again shortly')
+        child = subprocess.Popen(argv, **kwargs)
+        _CHILDREN.append(child)
+        _LAUNCH_TIMES.append(now)
+        return child
+
+
 def media_action(value):
     methods = {'play-pause': 'PlayPause', 'next': 'Next',
                'previous': 'Previous', 'stop': 'Stop'}
     if value not in methods:
         raise ValueError('Unbekannte Medienaktion')
     if shutil_which('playerctl'):
-        subprocess.Popen(['playerctl', value], start_new_session=True)
+        _launch(['playerctl', value], start_new_session=True)
         return
     if not shutil_which('busctl'):
         raise ValueError('Mediensteuerung benötigt playerctl oder busctl')
@@ -315,40 +425,41 @@ def media_action(value):
 
 
 def run_action(action, config=None):
+    validate_action(action)
     kind = action.get('type', '')
     value = action.get('value', '')
     if kind == 'app':
         if value not in {app['id'] for app in installed_apps()}:
             raise ValueError('App ist nicht installiert')
-        subprocess.Popen(['gtk-launch', value], start_new_session=True)
+        _launch(['gtk-launch', value], start_new_session=True)
     elif kind == 'script':
         path = Path(value).expanduser()
         if not path.is_file() or not os.access(path, os.X_OK):
             raise ValueError('Script fehlt oder ist nicht ausführbar')
-        subprocess.Popen([str(path)], start_new_session=True)
+        _launch([str(path)], start_new_session=True)
     elif kind == 'command':
         argv = shlex.split(value)
         if not argv:
             raise ValueError('Leerer Befehl')
-        subprocess.Popen(argv, start_new_session=True)
+        _launch(argv, start_new_session=True)
     elif kind == 'url':
         if not value.startswith(('https://', 'http://')):
             raise ValueError('Nur HTTP(S)-Adressen sind erlaubt')
-        subprocess.Popen(['xdg-open', value], start_new_session=True)
+        _launch(['xdg-open', value], start_new_session=True)
     elif kind == 'media':
         media_action(value)
     elif kind == 'volume':
         if value == 'mute':
-            subprocess.Popen(['wpctl', 'set-mute', '@DEFAULT_AUDIO_SINK@', 'toggle'], start_new_session=True)
+            _launch(['wpctl', 'set-mute', '@DEFAULT_AUDIO_SINK@', 'toggle'], start_new_session=True)
         elif value in ('up', 'down'):
-            subprocess.Popen(['wpctl', 'set-volume', '@DEFAULT_AUDIO_SINK@', '5%+' if value == 'up' else '5%-'], start_new_session=True)
+            _launch(['wpctl', 'set-volume', '--limit', '1.5', '@DEFAULT_AUDIO_SINK@', '5%+' if value == 'up' else '5%-'], start_new_session=True)
         else:
             raise ValueError('Unbekannte Lautstärkeaktion')
     elif kind == 'workspace':
         number = int(value)
         if number < 1 or number > 20:
             raise ValueError('Ungültiger Workspace')
-        subprocess.Popen(['hyprctl', 'dispatch', 'workspace', str(number)], start_new_session=True)
+        _launch(['hyprctl', 'dispatch', 'workspace', str(number)], start_new_session=True)
     elif kind == 'light':
         host = action.get('host', '')
         if value == 'toggle':

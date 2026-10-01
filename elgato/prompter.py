@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 
-from . import core
+from . import core, safety
 
 SCRIPTS_DIR = core.CONFIG_DIR / 'prompter-scripts'
 COMMANDS = ('start', 'mirror', 'stop', 'play', 'pause', 'playPause', 'faster', 'slower',
@@ -41,15 +41,16 @@ def script_path(name):
 def script_names():
     if not SCRIPTS_DIR.exists():
         return []
-    return sorted((path.stem for path in SCRIPTS_DIR.glob('*.md') if path.is_file()), key=str.casefold)
+    return sorted((path.stem for path in SCRIPTS_DIR.glob('*.md') if path.is_file()), key=str.casefold)[:64]
 
 
 def save_script(name, content):
     if len(content.encode('utf-8')) > 60 * 1024:
         raise ValueError('Skript ist zu groß')
     path = script_path(name)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding='utf-8')
+    if not path.exists() and len(script_names()) >= 64:
+        raise ValueError('Maximal 64 Skripte')
+    safety.atomic_write(path, content.encode('utf-8'))
     config = core.load_config()
     config['prompter'] = {**DEFAULTS, **config.get('prompter', {}), 'script': name}
     core.save_config(config)
@@ -103,7 +104,7 @@ def state(config):
     content = ''
     if script:
         try:
-            content = script_path(script).read_text(encoding='utf-8')
+            content = safety.read_bytes(script_path(script), safety.SCRIPT_LIMIT).decode('utf-8')
         except (OSError, ValueError):
             pass
     return {'connected': detected is not None, 'name': detected['description'] if detected else '',

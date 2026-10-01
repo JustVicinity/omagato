@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=scripts/path-guards.sh
+source "$source_dir/scripts/path-guards.sh"
 
 plugin_id="io.github.justvicinity.omagato"
 unit="$HOME/.config/systemd/user/omagato.service"
 venv_dir="${XDG_DATA_HOME:-$HOME/.local/share}/omagato/venv"
 config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-elgato"
+guard_managed_path "$unit" omagato.service
+guard_managed_path "$venv_dir" venv
+guard_managed_path "$config_dir" omarchy-elgato
 
 if [[ $# -gt 1 ]] || [[ $# -eq 1 && "$1" != "--purge-config" ]]; then
   echo "Usage: ./uninstall.sh [--purge-config]" >&2

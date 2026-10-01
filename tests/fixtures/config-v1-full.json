@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "brightness": 70,
+  "language": "de",
+  "icon_theme": "nord",
+  "empty_default": {"style": "theme", "icon": "blank", "label": "", "image": ""},
+  "pages": [
+    {
+      "name": "Start",
+      "keys": {
+        "0": {"type": "app", "value": "firefox.desktop", "label": "Browser", "system_icon": "firefox", "show_label": true, "icon_theme": "nord"},
+        "1": {"type": "script", "value": "~/bin/meeting.sh", "label": "Besprechung"},
+        "2": {"type": "command", "value": "notify-send 'Hallo Welt'", "label": "Hallo"},
+        "3": {"type": "url", "value": "https://example.org", "label": "Website"},
+        "4": {"type": "media", "value": "play-pause", "label": "Musik"},
+        "5": {"type": "volume", "value": "up", "label": "Lauter"},
+        "6": {"type": "workspace", "value": "2", "label": "Desktop 2"},
+        "7": {"type": "light", "value": "toggle", "host": "key-light.local", "label": "Licht"},
+        "8": {"type": "camera", "value": "128", "node": "/dev/video2", "control": "brightness", "label": "Kamera"},
+        "9": {"type": "prompter", "value": "playPause", "label": "Vortrag"},
+        "10": {"type": "multi", "value": "", "label": "Start Meeting", "steps": [{"type": "command", "value": "echo ready"}, {"type": "volume", "value": "mute"}]},
+        "11": {"type": "page", "value": "1", "label": "Seite 2"}
+      },
+      "empty": {"15": {"style": "black", "label": "Pause", "icon": "blank", "image": ""}}
+    },
+    {"name": "Studio", "keys": {"0": {"type": "page", "value": "0", "label": "Zurück"}}}
+  ],
+  "lights": [{"host": "key-light.local", "name": "Studio links"}, {"host": "192.168.1.42", "name": "Studio rechts"}],
+  "dials": {
+    "0": {"mode": "volume", "host": ""},
+    "1": {"mode": "light-brightness", "host": "key-light.local"},
+    "2": {"mode": "light-temperature", "host": "192.168.1.42"},
+    "3": {"mode": "none", "host": ""}
+  },
+  "prompter": {"screen": "DP-3", "source": "DP-1", "script": "Vortrag Herbst", "speed": 75, "font_size": 42, "flip": false},
+  "extension_example": {"retain_unknown_fields": true}
+}

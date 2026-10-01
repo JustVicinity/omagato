@@ -2,6 +2,8 @@
 
 OmaGato aims to make Elgato hardware useful from one Omarchy panel. **Only Stream Deck MK.2 has been checked here with physical hardware.** Every other path below is based on documented protocols, Linux device interfaces, and software integration; it needs field reports from owners. A device appearing in the overview means it was detected, not that every vendor feature works.
 
+The physical MK.2 check predates the 0.7.1 security changes. Those changes were validated with automated tests and local HTTP simulations; no physical-device validation was performed for this security release. Hardware checks are optional follow-up for compatibility, not a prerequisite for retaining the security protections.
+
 | Family | Implemented in OmaGato | Hardware test status and current gaps |
 | --- | --- | --- |
 | Stream Deck Mini, standard, MK.2, XL, Neo, Plus, Plus XL, Pedal, and HID compatible models | Physical keys, icons, actions, pages, brightness; basic dial actions where the Python driver exposes dials | MK.2 tested. Other variants untested. Touch strips, smart profiles, and proprietary Marketplace actions are not implemented. Driver recognition varies by model. |

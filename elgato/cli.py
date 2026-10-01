@@ -9,30 +9,75 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import hashlib
+from concurrent.futures import ThreadPoolExecutor
 
-from . import core, devices, i18n, openxlr, prompter, visuals
+from . import core, devices, i18n, openxlr, prompter, safety, visuals
 from .daemon import STATUS_FILE
 
 
 def status():
     try:
-        data = json.loads(STATUS_FILE.read_text())
-        if time.time() - data.get('updated', 0) < 6:
+        data = safety.object_value(safety.parse_json(safety.read_bytes(STATUS_FILE, 64 * 1024)))
+        safety.number_value(data.get('updated', 0), 0, 1e12)
+        decks = data.get('decks', [])
+        if not isinstance(decks, list) or len(decks) > 8:
+            raise ValueError('Invalid device status')
+        for deck in decks:
+            safety.object_value(deck)
+            for field, maximum in (('keys', 64), ('rows', 64), ('columns', 64), ('dials', 8)):
+                safety.number_value(deck.get(field, 0), 0, maximum)
+            for field in ('id', 'name'):
+                safety.text_value(deck.get(field, ''))
+        if type(data.get('running')) is not bool:
+            raise ValueError('Invalid controller status')
+        errors = data.get('errors', [])
+        if not isinstance(errors, list) or len(errors) > 32:
+            raise ValueError('Invalid controller errors')
+        for message in errors:
+            safety.text_value(message)
+        if 0 <= time.time() - data.get('updated', 0) < 6:
             return data
     except (OSError, ValueError):
         pass
     return {'running': False, 'decks': [], 'page': 0, 'errors': []}
 
 
+def poll_light(light):
+    """Back off failed periodic probes; explicit user changes bypass this cache."""
+    cache = core.CONFIG_DIR / 'light-health' / (hashlib.sha256(light['host'].encode()).hexdigest() + '.json')
+    now = time.time()
+    try:
+        previous = safety.object_value(safety.parse_json(safety.read_bytes(cache, 1024)))
+        stamp = safety.number_value(previous.get('updated'), 0, 1e12)
+        if 0 <= now - stamp < 15:
+            return {**light, 'error': safety.text_value(previous.get('error'))}
+    except (OSError, ValueError):
+        pass
+    try:
+        result = {**light, 'state': core.light_state(light['host'])}
+        cache.unlink(missing_ok=True)
+        return result
+    except (OSError, ValueError) as exc:
+        message = str(exc)[:240]
+        try:
+            safety.atomic_write(cache, json.dumps({'updated': now, 'error': message}).encode())
+        except (OSError, ValueError):
+            pass
+        return {**light, 'error': message}
+
+
 def parse_action(text):
-    action = json.loads(text)
+    if len(text.encode()) > 8192:
+        raise ValueError('Aktion ist zu groß')
+    action = safety.parse_json(text)
     if not isinstance(action, dict) or action.get('type') not in (
         'app', 'script', 'command', 'url', 'media', 'volume', 'workspace',
         'light', 'camera', 'prompter', 'page', 'multi'):
         raise ValueError('Ungültige Aktion')
     if len(json.dumps(action)) > 8192:
         raise ValueError('Aktion ist zu groß')
-    return action
+    return core.validate_action(action)
 
 
 def main(argv=None):
@@ -127,7 +172,7 @@ def main(argv=None):
             if not status()['running']:
                 subprocess.Popen([sys.executable, '-m', 'elgato', 'daemon'],
                                  cwd=str(Path(__file__).resolve().parent.parent),
-                                 stdout=subprocess.DEVNULL, stderr=(core.CONFIG_DIR / 'daemon.log').open('a') if core.CONFIG_DIR.exists() else subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                  start_new_session=True)
             result = {'ok': True}
         elif args.command == 'apps':
@@ -195,12 +240,8 @@ def main(argv=None):
             result = {'ok': True}
         elif args.command == 'state':
             config = core.load_config()
-            lights = []
-            for light in config['lights']:
-                try:
-                    lights.append({**light, 'state': core.light_state(light['host'])})
-                except Exception as exc:
-                    lights.append({**light, 'error': str(exc)})
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                lights = list(pool.map(poll_light, config['lights']))
             worker = status()
             if not worker['running'] and (importlib.util.find_spec('StreamDeck') is None or importlib.util.find_spec('PIL') is None):
                 worker['errors'] = [i18n.tr('error_missing_deps', config)]
@@ -228,11 +269,11 @@ def main(argv=None):
             elif args.command == 'set-icon-theme':
                 config['icon_theme'] = args.value
             elif args.command == 'set-empty-default':
-                config['empty_default'] = visuals.normalize_empty(json.loads(args.spec))
+                config['empty_default'] = visuals.normalize_empty(safety.parse_json(args.spec))
             elif args.command == 'set-empty':
                 if not 0 <= args.page < len(config['pages']) or not 0 <= args.key < 64:
                     raise ValueError('Ungültige Seite oder Taste')
-                config['pages'][args.page].setdefault('empty', {})[str(args.key)] = visuals.normalize_empty(json.loads(args.spec))
+                config['pages'][args.page].setdefault('empty', {})[str(args.key)] = visuals.normalize_empty(safety.parse_json(args.spec))
             elif args.command == 'clear-empty':
                 if not 0 <= args.page < len(config['pages']) or not 0 <= args.key < 64:
                     raise ValueError('Ungültige Seite oder Taste')
@@ -265,19 +306,21 @@ def main(argv=None):
                 host = core.validate_light(args.host)
                 core.light_state(host)
                 if host not in [light['host'] for light in config['lights']]:
-                    config['lights'].append({'host': host, 'name': args.name or host})
+                    if len(config['lights']) >= 16:
+                        raise ValueError('Maximal 16 Leuchten')
+                    config['lights'].append({'host': host, 'name': safety.text_value(args.name or host)})
             elif args.command == 'remove-light':
                 config['lights'] = [light for light in config['lights'] if light['host'] != args.host]
             core.save_config(config)
             result = {'ok': True, 'config': config}
         print(json.dumps(result, ensure_ascii=False))
         return 0
-    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
         try:
             config = core.load_config()
         except (OSError, ValueError):
             config = core.default_config()
-        print(json.dumps({'error': i18n.error(str(exc), config)}, ensure_ascii=False))
+        print(json.dumps({'error': i18n.error(str(exc)[:240], config)}, ensure_ascii=False))
         return 1
 
 

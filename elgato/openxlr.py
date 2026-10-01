@@ -5,12 +5,12 @@ never enters the Quickshell state, process arguments, or diagnostic output.
 """
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
-from urllib import error, request
+import re
 
-BASE = 'http://127.0.0.1:37890/api/v1'
+from . import network, safety
+
 BOOLEAN = {
     'mute': 'mute', 'lowCut': 'lowCut', 'expander': 'expander',
     'voiceTune': 'voiceTune', 'phantom': 'phantom', 'clipGuard': 'clipGuard',
@@ -37,30 +37,38 @@ def token_path():
 
 
 def _call(path, command=None):
-    token = token_path().read_text(encoding='utf-8').strip()
-    if not token or len(token) > 512:
-        raise ValueError('OpenXLR token is invalid')
-    body = None if command is None else json.dumps(command, separators=(',', ':')).encode('utf-8')
-    headers = {'Authorization': 'Bearer ' + token}
-    if body is not None:
-        headers['Content-Type'] = 'application/json'
-    req = request.Request(BASE + path, data=body, headers=headers,
-                          method='GET' if body is None else 'POST')
     try:
-        with request.urlopen(req, timeout=2) as response:
-            data = response.read(1024 * 1024 + 1)
-    except (error.URLError, TimeoutError) as exc:
-        raise ValueError('OpenXLR is unavailable') from exc
-    if len(data) > 1024 * 1024:
-        raise ValueError('OpenXLR response is too large')
-    payload = json.loads(data)
-    if not isinstance(payload, dict):
-        raise ValueError('Invalid OpenXLR response')
+        token = safety.read_bytes(token_path(), 514, secret=True).decode('ascii').strip()
+    except UnicodeError:
+        raise ValueError('OpenXLR token is invalid') from None
+    if not re.fullmatch(r'[!-~]{1,512}', token):
+        raise ValueError('OpenXLR token is invalid')
+    if path not in ('/state', '/commands'):
+        raise ValueError('Invalid OpenXLR path')
+    data = network.request('127.0.0.1', 37890, '/api/v1' + path,
+                           method='GET' if command is None else 'POST', payload=command,
+                           headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'},
+                           limit=network.OPENXLR_LIMIT, mode='loopback')
+    payload = safety.object_value(safety.parse_json(data))
+    # Even an endpoint echoing credentials cannot place the token in UI/errors.
+    pending = [payload]
+    while pending:
+        item = pending.pop()
+        for key in list(item) if isinstance(item, dict) else range(len(item)):
+            value = item[key]
+            if isinstance(value, str):
+                item[key] = value.replace(token, '[redacted]')
+            elif isinstance(value, (dict, list)):
+                pending.append(value)
+    messages = payload.get('messages', [])
+    if not isinstance(messages, list) or len(messages) > 128 or any(not isinstance(m, dict) for m in messages):
+        raise ValueError('Invalid OpenXLR messages')
+    for message in messages:
+        for field in ('message', 'error'):
+            if field in message:
+                safety.text_value(message[field])
     if payload.get('ok') is False:
-        messages = payload.get('messages') or []
-        detail = next((m.get('message') or m.get('error') for m in messages
-                       if isinstance(m, dict) and (m.get('message') or m.get('error'))), '')
-        raise ValueError(str(detail)[:240] or 'OpenXLR rejected the command')
+        raise ValueError('OpenXLR rejected the command')
     return payload
 
 
@@ -73,13 +81,54 @@ def raw_state():
 
 
 def state():
-    """Return UI-safe, capability-filtered controls and mixer data."""
+    """Return a stable unavailable state for invalid/unavailable local responses."""
     try:
-        raw = raw_state()
-    except (OSError, ValueError, json.JSONDecodeError):
+        return _state(raw_state())
+    except (OSError, ValueError, RecursionError):
         return {'available': False, 'connected': False, 'controls': [], 'mixes': []}
-    caps = raw.get('capabilities') or {}
-    values = raw.get('state') or {}
+
+
+def _state(raw):
+    safety.object_value(raw)
+    caps = safety.object_value({} if raw.get('capabilities') is None else raw['capabilities'])
+    values = safety.object_value({} if raw.get('state') is None else raw['state'])
+    for key, value in caps.items():
+        if key in ('xlrInputs', 'hpOutputs'):
+            if type(value) is not int or not 0 <= value <= 8:
+                raise ValueError('Invalid OpenXLR capability count')
+        elif key in set(BOOLEAN.values()) | {spec[0] for spec in NUMERIC.values()}:
+            if type(value) is not bool:
+                raise ValueError('Invalid OpenXLR capability')
+    for control in BOOLEAN:
+        for key in (control, control + '2'):
+            if key in values and type(values[key]) is not bool:
+                raise ValueError('Invalid OpenXLR switch')
+    for control, (_, key, low, high, _) in NUMERIC.items():
+        for field in (key, key.replace('Db', '2Db') if control == 'gain' else key + '2'):
+            if field in values:
+                safety.number_value(values[field], low, high)
+    mixer = safety.object_value({} if raw.get('mixer') is None else raw['mixer'])
+    mixes = mixer.get('mixes', [])
+    if not isinstance(mixes, list) or len(mixes) > 64:
+        raise ValueError('Invalid OpenXLR mixer')
+    for mix in mixes:
+        safety.object_value(mix)
+        for field in ('id', 'name', 'kind'):
+            safety.text_value(mix.get(field, ''))
+        safety.number_value(mix.get('volume', 0), 0, 1.5)
+        if type(mix.get('muted', False)) is not bool:
+            raise ValueError('Invalid OpenXLR mute state')
+    device = safety.object_value({} if raw.get('device') is None else raw['device'])
+    safety.text_value(device.get('model', ''))
+    if type(raw.get('connected', False)) is not bool:
+        raise ValueError('Invalid OpenXLR connection state')
+    for field in ('activeProfile', 'warning'):
+        safety.text_value(raw.get(field) or '')
+    profiles = raw.get('profiles') or []
+    if not isinstance(profiles, list) or len(profiles) > 64:
+        raise ValueError('Invalid OpenXLR profiles')
+    for profile in profiles:
+        safety.text_value(profile)
     controls = []
     for control, capability in BOOLEAN.items():
         if caps.get(capability):
@@ -98,9 +147,9 @@ def state():
             controls.append({'id': control + '2', 'label': control + ' 2',
                              'type': 'number', 'value': values.get(value_key.replace('Db', '2Db') if control == 'gain' else value_key + '2', minimum),
                              'min': minimum, 'max': maximum, 'step': step})
-    mixer = raw.get('mixer') or {}
+    mixer = {} if raw.get('mixer') is None else raw['mixer']
     return {'available': True, 'connected': bool(raw.get('connected')),
-            'device': (raw.get('device') or {}).get('model', ''),
+            'device': ({} if raw.get('device') is None else raw['device']).get('model', ''),
             'controls': controls, 'mixes': [{k: mix.get(k) for k in ('id', 'name', 'kind', 'volume', 'muted')}
                                        for mix in mixer.get('mixes', []) if isinstance(mix, dict)],
             'profiles': raw.get('profiles') or [],
