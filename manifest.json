@@ -5,13 +5,13 @@
   "version": "0.7.1",
   "author": "JustVicinity and contributors",
   "license": "MIT",
-  "description": "Elgato Geräte erkennen und Stream Deck, Licht, Kamera und Audio im Omarchy Stil steuern.",
+  "description": "Customize Stream Deck keys and control compatible Elgato lights, cameras, audio, and Prompter from a panel that follows your Omarchy theme.",
   "kinds": ["service", "bar-widget"],
   "keepLoaded": true,
   "entryPoints": {"service": "PrompterService.qml", "barWidget": "BarWidget.qml"},
   "barWidget": {
     "displayName": "OmaGato",
-    "description": "Stream Deck, Beleuchtung, Kamera und Audio",
+    "description": "Stream Deck, lights, cameras, audio, and Prompter controls",
     "category": "System",
     "allowMultiple": false,
     "defaultSection": "right"
