@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.0 — 2026-10-10
+
+- Separate device detection from readiness; add guided installation/repair and USB access checks.
+- Preserve legacy layouts as a shared template; save independent keys, pages, brightness, empty-key styles and dials per deck.
+- Add application focus page rules and touch-strip tap/hold assignments and swipe navigation.
+- Poll lightweight status every four seconds, probe devices every thirty seconds, and render only the selected page after edits.
+- Add privacy-safe diagnostics, an owner hardware checklist and multi-device regression tests.
+
 ## 0.7.1
 
 Security release addressing the light response memory-exhaustion report in [marketplace issue #9325](https://github.com/omacom/omarchy-plugin-marketplace/issues/9325#issuecomment-5918880140).

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 
 
 # Current device families from Elgato's downloads page. Names describe products,
@@ -33,9 +34,14 @@ def usb_devices(root=Path('/sys/bus/usb/devices')):
             if (node / 'idVendor').read_text().strip().lower() != '0fd9':
                 continue
             name = (node / 'product').read_text().strip()
+            try:
+                serial = (node / 'serial').read_text().strip()
+            except OSError:
+                serial = ''
             found.append({'name': name or 'Elgato USB',
                           'id': (node / 'idProduct').read_text().strip().lower(),
-                          'path': node.name})
+                          'path': node.name,
+                          'profile': 'deck-' + hashlib.sha256(serial.encode()).hexdigest()[:24] if serial else ''})
         except OSError:
             continue
     return found
@@ -64,15 +70,18 @@ def inventory(worker, cameras, lights, audio=(), usb=None, prompter=None, xlr=No
     def add(family, name, key, level, detail=''):
         if key not in seen or (seen[key]['level'] == 'detected' and level != 'detected'):
             seen[key] = {'family': family, 'name': name, 'level': level,
-                         'detail': detail, 'connected': True}
+                         'id': key, 'detail': detail, 'connected': True, 'controllable': level == 'control'}
 
     for item in usb:
         name = item['name']
         family = family_for(name)
-        add(family, name, 'name:' + name.casefold(), 'detected', 'USB ' + item['id'])
+        key = item.get('profile') or 'usb:' + item.get('path', name.casefold())
+        add(family, name, key, 'detected', 'USB ' + item['id'])
 
     for deck in worker.get('decks', []):
-        add('deck', deck['name'], 'name:' + deck['name'].casefold(), 'control',
+        if deck.get('profile'):
+            seen.pop('usb:' + deck.get('id', '').split(':', 1)[0], None)
+        add('deck', deck['name'], deck.get('profile') or ('usb:' + deck['id'].split(':', 1)[0] if deck.get('id') else 'name:' + deck['name'].casefold()), 'control',
             str(deck['keys']) + ' keys' + (', ' + str(deck['dials']) + ' dials' if deck.get('dials') else ''))
     for camera in cameras:
         family = family_for(camera['name'])
@@ -94,10 +103,11 @@ def inventory(worker, cameras, lights, audio=(), usb=None, prompter=None, xlr=No
         devices = [item for item in seen.values() if item['family'] == family]
         connected_names = {item['name'].casefold() for item in devices}
         result.append({'id': family, 'label': label, 'connected': bool(devices),
+                       'controllable': any(item['controllable'] for item in devices),
                        'devices': devices, 'variants': [name for name in variants
                                                       if name.casefold() not in connected_names]})
     others = [item for item in seen.values() if item['family'] == 'other']
     if others:
         result.append({'id': 'other', 'label': 'Other Elgato', 'connected': True,
-                       'devices': others, 'variants': []})
+                       'controllable': False, 'devices': others, 'variants': []})
     return result

@@ -12,7 +12,7 @@ import time
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
 
-from . import core, devices, i18n, openxlr, prompter, safety, visuals
+from . import core, devices, i18n, openxlr, prompter, safety, visuals, profiles, health
 from .daemon import STATUS_FILE
 
 
@@ -27,6 +27,10 @@ def status():
             safety.object_value(deck)
             for field, maximum in (('keys', 64), ('rows', 64), ('columns', 64), ('dials', 8)):
                 safety.number_value(deck.get(field, 0), 0, maximum)
+            if 'profile' in deck:
+                profiles.validate_id(deck['profile'])
+            if 'page' in deck:
+                safety.number_value(deck['page'], 0, 15)
             for field in ('id', 'name'):
                 safety.text_value(deck.get(field, ''))
         if type(data.get('running')) is not bool:
@@ -82,9 +86,17 @@ def parse_action(text):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description='OmaGato · Omarchy Elgato Controller')
+    parser.add_argument('--device', default='')
+    parser.add_argument('--page', type=int, default=None)
+    parser.add_argument('--surface', choices=['keys', 'touch', 'touch_long'], default='keys')
+    parser.add_argument('--local', action='store_true')
+    parser.add_argument('--quick', action='store_true')
     sub = parser.add_subparsers(dest='command', required=True)
-    for name in ('state', 'apps', 'discover-lights', 'cameras', 'daemon', 'start', 'prompter-state'):
+    for name in ('state', 'apps', 'discover-lights', 'cameras', 'daemon', 'start', 'prompter-state', 'diagnostics', 'reset-device'):
         sub.add_parser(name)
+    item = sub.add_parser('app-page')
+    item.add_argument('app')
+    item.add_argument('page', type=int)
     item = sub.add_parser('assign')
     item.add_argument('page', type=int)
     item.add_argument('key', type=int)
@@ -163,10 +175,14 @@ def main(argv=None):
     item.add_argument('value')
     args = parser.parse_args(argv)
     try:
-        if args.command == 'daemon':
+        if args.device:
+            profiles.validate_id(args.device)
+        if args.command == 'diagnostics':
+            result = health.diagnostics(status(), devices.usb_devices())
+        elif args.command == 'daemon':
             from .daemon import main as daemon_main
             return daemon_main()
-        if args.command == 'start':
+        elif args.command == 'start':
             if importlib.util.find_spec('StreamDeck') is None or importlib.util.find_spec('PIL') is None:
                 raise ValueError('Stream Deck Abhängigkeiten fehlen. Bitte ./install.sh ausführen.')
             if not status()['running']:
@@ -239,7 +255,21 @@ def main(argv=None):
             core.save_config(config)
             result = {'ok': True}
         elif args.command == 'state':
-            config = core.load_config()
+            saved = core.load_config()
+            config = profiles.effective(saved, args.device)
+            worker = status()
+            result = {'config': config, 'worker': worker, 'language': i18n.language(config), 'words': i18n.words(config)}
+            if args.quick:
+                print(json.dumps(result, ensure_ascii=False))
+                return 0
+            key_count = next((deck['keys'] for deck in worker['decks'] if deck.get('profile') == args.device), 15)
+            if args.surface != 'keys':
+                key_count = next((max(1, deck.get('dials', 0)) for deck in worker['decks'] if deck.get('profile') == args.device), 4)
+            previews = visuals.preview_data(config, key_count, page_index=args.page, surface=args.surface) if importlib.util.find_spec('PIL') else {'pages': [], 'catalog': [], 'themes': list(visuals.THEMES), 'theme': visuals.resolve_theme(config)}
+            if args.local:
+                result['visuals'] = previews
+                print(json.dumps(result, ensure_ascii=False))
+                return 0
             with ThreadPoolExecutor(max_workers=4) as pool:
                 lights = list(pool.map(poll_light, config['lights']))
             worker = status()
@@ -249,21 +279,37 @@ def main(argv=None):
             audio = core.audio_nodes()
             xlr = openxlr.state()
             prompter_state = prompter.state(config)
+            usb = devices.usb_devices()
             result = {'config': config, 'worker': worker, 'lights': lights,
+                      'setup': health.check(worker, usb),
                       'cameras': cameras, 'audio': audio, 'xlr': xlr,
                       'prompter': prompter_state,
-                      'devices': devices.inventory(worker, cameras, lights, audio, prompter=prompter_state, xlr=xlr),
+                      'devices': devices.inventory(worker, cameras, lights, audio, usb=usb, prompter=prompter_state, xlr=xlr),
                       'theme': core.palette(),
                       'language': i18n.language(config), 'words': i18n.words(config),
-                      'visuals': visuals.preview_data(config, max([15, *(deck['keys'] for deck in worker['decks'])]))}
+                      'visuals': previews}
         else:
-            config = core.load_config()
-            if args.command == 'assign':
+            saved = core.load_config()
+            scoped = args.command in ('assign', 'clear', 'set-empty-default', 'set-empty', 'clear-empty', 'brightness', 'set-dial', 'new-page', 'delete-page', 'app-page')
+            config = profiles.editable(saved, args.device) if scoped else saved
+            if args.command == 'reset-device':
+                if not args.device:
+                    raise ValueError('Select a device first')
+                config.get('device_profiles', {}).pop(args.device, None)
+            elif args.command == 'app-page':
+                rules = config.setdefault('app_pages', {})
+                if args.page == -1:
+                    rules.pop(args.app, None)
+                else:
+                    rules[args.app] = args.page
+            elif args.command == 'assign':
                 if not 0 <= args.page < len(config['pages']) or not 0 <= args.key < 64:
                     raise ValueError('Ungültige Seite oder Taste')
-                config['pages'][args.page]['keys'][str(args.key)] = parse_action(args.action)
+                config['pages'][args.page].setdefault(args.surface, {})[str(args.key)] = parse_action(args.action)
             elif args.command == 'clear':
-                config['pages'][args.page]['keys'].pop(str(args.key), None)
+                if not 0 <= args.page < len(config['pages']) or not 0 <= args.key < 64:
+                    raise ValueError('Invalid page or key')
+                config['pages'][args.page].setdefault(args.surface, {}).pop(str(args.key), None)
             elif args.command == 'set-language':
                 config['language'] = args.value
             elif args.command == 'set-icon-theme':
@@ -291,17 +337,19 @@ def main(argv=None):
                     raise ValueError('Maximal 16 Seiten')
                 config['pages'].append({'name': args.name[:40] or 'Seite', 'keys': {}})
             elif args.command == 'delete-page':
-                if len(config['pages']) == 1 or args.page == 0:
+                if len(config['pages']) == 1 or not 0 < args.page < len(config['pages']):
                     raise ValueError('Startseite kann nicht gelöscht werden')
                 del config['pages'][args.page]
+                config['app_pages'] = {app: page - (page > args.page) for app, page in config.get('app_pages', {}).items() if page != args.page}
                 for page in config['pages']:
-                    for key, action in list(page['keys'].items()):
-                        if action.get('type') == 'page':
-                            target = int(action.get('value', -1))
-                            if target == args.page:
-                                del page['keys'][key]
-                            elif target > args.page:
-                                action['value'] = str(target - 1)
+                    for mapping in (page.get('keys', {}), page.get('touch', {}), page.get('touch_long', {})):
+                        for key, action in list(mapping.items()):
+                            if action.get('type') == 'page':
+                                target = int(action.get('value', -1))
+                                if target == args.page:
+                                    del mapping[key]
+                                elif target > args.page:
+                                    action['value'] = str(target - 1)
             elif args.command == 'add-light':
                 host = core.validate_light(args.host)
                 core.light_state(host)
@@ -311,7 +359,9 @@ def main(argv=None):
                     config['lights'].append({'host': host, 'name': safety.text_value(args.name or host)})
             elif args.command == 'remove-light':
                 config['lights'] = [light for light in config['lights'] if light['host'] != args.host]
-            core.save_config(config)
+            if scoped:
+                profiles.store(saved, args.device, config)
+            core.save_config(saved)
             result = {'ok': True, 'config': config}
         print(json.dumps(result, ensure_ascii=False))
         return 0

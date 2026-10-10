@@ -28,6 +28,16 @@ Panel {
   property int tab: 4
   property int pageIndex: 0
   property int keyIndex: 0
+  property string editSurface: "keys"
+  onEditSurfaceChanged: { keyIndex = 0; editorDirty = false; refresh(false, true) }
+  readonly property var keyActions: currentPage[editSurface] || ({})
+  property string loadedDevice: ""
+  property string loadedSurface: "keys"
+  property string selectedDevice: ""
+  property string pendingDevice: ""
+  property int pendingPage: 0
+  property string pendingSurface: "keys"
+  property bool deviceInitialized: false
   property string selectedCamera: ""
   property string editorIcon: ""
   property bool editorDirty: false
@@ -43,9 +53,9 @@ Panel {
   property string pendingClearLabel: ""
   readonly property var pages: modelState.config.pages || []
   readonly property var currentPage: pages[Math.min(pageIndex, pages.length - 1)] || { name: "Start", keys: {} }
-  readonly property var currentAction: currentPage.keys[String(keyIndex)] || ({})
+  readonly property var currentAction: keyActions[String(keyIndex)] || ({})
   readonly property bool hasAction: !!currentAction.type
-  readonly property var deck: modelState.worker.decks.length ? modelState.worker.decks[0] : ({ keys: 15, columns: 5, rows: 3, dials: 0, name: t("preview") })
+  readonly property var deck: selectedDevice && modelState.worker.decks.find(function(item) { return item.profile === root.selectedDevice }) ? modelState.worker.decks.find(function(item) { return item.profile === root.selectedDevice }) : ({ keys: 15, columns: 5, rows: 3, dials: 0, name: t("preview") })
   readonly property var globalEmpty: modelState.config.empty_default || ({ style: "theme", icon: "blank", label: "", image: "" })
   readonly property var selectedEmpty: (currentPage.empty || {})[String(keyIndex)] || globalEmpty
   readonly property color fg: bar ? bar.foreground : Color.foreground
@@ -71,12 +81,13 @@ Panel {
   }
   function queue(args, kind) {
     var entries = commandQueue.slice()
-    if (kind === "state" && (pendingKind === "state" || entries.some(function(x) { return x.kind === "state" }))) return
-    if (kind === "mutation" && ["brightness", "set-light", "set-camera"].includes(args[0])) {
+    if (["state", "quick", "local"].includes(kind) && ((process.running && pendingKind === kind && pendingDevice === selectedDevice && pendingPage === pageIndex && pendingSurface === editSurface) || entries.some(function(x) { return x.kind === kind && x.device === root.selectedDevice && x.page === root.pageIndex && x.surface === root.editSurface }))) return
+    var operation = args[0] === "--device" ? args[2] : args[0]
+    if (kind === "mutation" && ["brightness", "set-light", "set-camera"].includes(operation)) {
       var signature = args.slice(0, -1).join("\u0000")
       entries = entries.filter(function(x) { return x.args.slice(0, -1).join("\u0000") !== signature })
     }
-    entries.push({ args: args, kind: kind })
+    entries.push({ args: args, kind: kind, device: selectedDevice, page: pageIndex, surface: editSurface })
     commandQueue = entries
     kick()
   }
@@ -86,11 +97,31 @@ Panel {
     var item = entries.shift()
     commandQueue = entries
     pendingKind = item.kind
+    pendingDevice = item.device || ""
+    pendingPage = item.page || 0
+    pendingSurface = item.surface || "keys"
     process.command = [cli].concat(item.args)
     process.running = true
   }
-  function refresh() { queue(["state"], "state") }
-  function mutate(args) { queue(args, "mutation") }
+  function refresh(quick, local) {
+    var args = ["--page", String(pageIndex), "--surface", editSurface]
+    if (selectedDevice) args = args.concat(["--device", selectedDevice])
+    if (quick) args.push("--quick")
+    if (local) args.push("--local")
+    args.push("state")
+    queue(args, quick ? "quick" : local ? "local" : "state")
+  }
+  function mutate(args) {
+    if (["assign", "clear"].includes(args[0])) args = ["--surface", editSurface].concat(args)
+    if (selectedDevice && (["--surface"].includes(args[0]) || ["assign", "clear", "set-empty-default", "set-empty", "clear-empty", "brightness", "set-dial", "new-page", "delete-page", "app-page"].includes(args[0])))
+      args = ["--device", selectedDevice].concat(args)
+    queue(args, "mutation")
+  }
+  onSelectedDeviceChanged: {
+    editSurface = "keys"; pageIndex = 0; keyIndex = 0; editorDirty = false
+    commandQueue = commandQueue.filter(function(item) { return item.kind !== "state" && item.kind !== "quick" && item.kind !== "local" })
+    refresh()
+  }
   function setCameraControl(id, value) {
     queue(["set-camera", selectedCamera, id, String(value)], "camera-mutation")
   }
@@ -174,7 +205,7 @@ Panel {
     })
   }
   function askClear(index) {
-    var action = currentPage.keys[String(index)] || ({})
+    var action = keyActions[String(index)] || ({})
     if (!action.type) return
     pickerOpen = false
     pendingClearPage = pageIndex
@@ -252,7 +283,7 @@ Panel {
     themeSelect.currentIndex = Math.max(0, themeIds.indexOf(modelState.config.icon_theme || "auto"))
   }
   onKeyIndexChanged: { editorDirty = false; syncEditors() }
-  onPageIndexChanged: { editorDirty = false; syncEditors() }
+  onPageIndexChanged: { editorDirty = false; syncEditors(); refresh(false, true) }
   onModelStateChanged: {
     if (!editorDirty) syncEditors()
     if (prompterService) prompterService.configure(modelState.prompter)
@@ -274,7 +305,21 @@ Panel {
         try {
           var result = JSON.parse(text)
           if (result.error) root.message = result.error
-          else if (root.pendingKind === "state") { root.modelState = result; root.message = "" }
+          else if (["state", "quick", "local"].includes(root.pendingKind)) {
+            if (root.pendingDevice !== root.selectedDevice || root.pendingPage !== root.pageIndex || root.pendingSurface !== root.editSurface) return
+            if (["quick", "local"].includes(root.pendingKind)) {
+              var merged = Object.assign({}, root.modelState, result)
+              root.modelState = merged
+            } else root.modelState = result
+            root.loadedDevice = root.pendingDevice
+            root.loadedSurface = root.pendingSurface
+            if (root.pageIndex >= root.pages.length) root.pageIndex = 0
+            root.message = ""
+            if (!root.deviceInitialized && result.worker.decks.length) {
+              root.deviceInitialized = true
+              root.selectedDevice = result.worker.decks[0].profile || ""
+            }
+          }
           else if (root.pendingKind === "discover") root.discovered = result
           else if (root.pendingKind === "controls") root.controls = result
           else if (root.pendingKind.startsWith("import-")) {
@@ -304,8 +349,9 @@ Panel {
       onStreamFinished: try { root.apps = JSON.parse(text) } catch (error) { root.apps = [] }
     }
   }
-  Timer { id: refreshTimer; interval: 280; onTriggered: root.refresh() }
-  Timer { interval: 4000; repeat: true; running: root.opened; onTriggered: root.refresh() }
+  Timer { id: refreshTimer; interval: 280; onTriggered: root.refresh(false, true) }
+  Timer { interval: 4000; repeat: true; running: root.opened; onTriggered: root.refresh(true) }
+  Timer { interval: 30000; repeat: true; running: root.opened; onTriggered: root.refresh() }
   FileDialog {
     id: filePicker
     title: root.t("choose_image")
@@ -425,6 +471,13 @@ Panel {
             font.family: root.fontName
             font.pixelSize: Style.font.caption
           }
+          SetupPanel {
+            width: parent.width
+            visible: root.tab === 3 || (root.tab === 4 && (health.needs_install || health.needs_restart || !health.running || health.usb_access === false))
+            health: root.modelState.setup || ({ needs_install: true, running: false })
+            words: root.modelState.words
+            onRefreshRequested: root.refresh()
+          }
           Flow {
             width: parent.width
             spacing: Style.space(6)
@@ -490,7 +543,7 @@ Panel {
                       font.bold: true
                     }
                     Text { textFormat: Text.PlainText;
-                      text: familyCard.modelData.connected ? root.t("connected") : root.t("not_connected")
+                      text: familyCard.modelData.controllable ? root.t("ready_device") : familyCard.modelData.connected ? root.t("detected_only") : root.t("not_connected")
                       color: familyCard.modelData.connected ? Color.accent : Color.muted
                       font.family: root.fontName
                     }
@@ -516,7 +569,7 @@ Panel {
                     wrapMode: Text.Wrap
                   }
                   ActionChip {
-                    visible: familyCard.modelData.connected && ["deck", "light", "camera", "capture", "audio"].includes(familyCard.modelData.id)
+                    visible: familyCard.modelData.controllable && ["deck", "light", "camera", "capture", "audio"].includes(familyCard.modelData.id)
                     label: root.t("open_controls")
                     onClicked: root.tab = familyCard.modelData.id === "deck" ? 0 : familyCard.modelData.id === "light" ? 1 : familyCard.modelData.id === "audio" ? 5 : 2
                   }
@@ -532,13 +585,32 @@ Panel {
 
           Column {
             visible: root.tab === 0
+            enabled: root.loadedDevice === root.selectedDevice && root.loadedSurface === root.editSurface
             width: parent.width
             spacing: Style.space(10)
+            DeckProfilePicker {
+              width: parent.width
+              words: root.modelState.words
+              decks: root.modelState.worker.decks
+              profiles: root.modelState.config.device_profiles || ({})
+              selectedDevice: root.selectedDevice
+              onDeviceSelected: function(device) { root.selectedDevice = device }
+              onResetRequested: function(device) { root.queue(["--device", device, "reset-device"], "mutation") }
+            }
             Text { textFormat: Text.PlainText;
               text: root.deck.name + " · " + root.deck.keys + " " + root.t("key")
               color: root.fg
               font.family: root.fontName
               font.pixelSize: Style.font.body
+            }
+            AppPageRules {
+              width: parent.width
+              words: root.modelState.words
+              pages: root.pages
+              bindings: root.modelState.config.app_pages || ({})
+              windows: root.availableWindows
+              pageIndex: root.pageIndex
+              onBindRequested: function(app, page) { root.mutate(["app-page", app, String(page)]) }
             }
             Flow {
               width: parent.width
@@ -567,17 +639,25 @@ Panel {
                 }
               }
             }
+            UiSelect {
+              visible: !!root.deck.touch
+              width: parent.width
+              model: [root.t("key"), root.t("touch_short"), root.t("touch_long")]
+              currentIndex: ["keys", "touch", "touch_long"].indexOf(root.editSurface)
+              onActivated: function(index) { root.editSurface = ["keys", "touch", "touch_long"][index] }
+            }
+            Text { visible: !!root.deck.touch; text: root.t("touch_hint"); width: parent.width; wrapMode: Text.Wrap; color: Color.muted; font.family: root.fontName }
             Grid {
               id: keyGrid
               width: parent.width
               columns: Math.max(1, root.deck.columns)
               spacing: Style.space(6)
               Repeater {
-                model: root.deck.keys
+                model: root.editSurface === "keys" ? root.deck.keys : Math.max(1, root.deck.dials)
                 Rectangle {
                   id: keyTile
                   required property int index
-                  readonly property var action: root.currentPage.keys[String(index)] || ({})
+                  readonly property var action: root.keyActions[String(index)] || ({})
                   readonly property var visual: root.previewFor(index)
                   width: (keyGrid.width - keyGrid.spacing * (keyGrid.columns - 1)) / keyGrid.columns
                   height: Math.max(Style.space(62), width * .82)

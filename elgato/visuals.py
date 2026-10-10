@@ -279,18 +279,21 @@ def empty_image(spec, theme):
     return None
 
 
-def preview_data(config, key_count=32):
+def preview_data(config, key_count=32, page_index=None, surface='keys'):
     theme = resolve_theme(config)
     pages = []
-    for page_index, page in enumerate(config['pages']):
+    for index, page in enumerate(config['pages']):
         previews = {}
+        if page_index is not None and page_index != index:
+            pages.append(previews)
+            continue
         for key_index in range(key_count):
-            action = page.get('keys', {}).get(str(key_index))
+            action = page.get(surface, {}).get(str(key_index))
             if action:
                 path = action_image(action, theme)
                 style = 'action'
             else:
-                spec = empty_for(config, page_index, key_index)
+                spec = empty_for(config, index, key_index)
                 path = empty_image(spec, theme)
                 style = spec.get('style', 'theme')
             previews[str(key_index)] = {'path': str(path) if path else '', 'style': style,

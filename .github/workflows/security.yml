@@ -28,8 +28,8 @@ jobs:
             --index-url https://pypi.org/simple --require-hashes \
             --only-binary=:all: -r requirements.txt
       - run: python -m unittest discover -s tests
-      - run: bash -n install.sh uninstall.sh setup-usb-access.sh scripts/path-guards.sh
-      - run: shellcheck install.sh uninstall.sh setup-usb-access.sh scripts/path-guards.sh bin/elgatoctl
+      - run: bash -n install.sh uninstall.sh setup-usb-access.sh scripts/path-guards.sh scripts/setup-terminal.sh
+      - run: shellcheck install.sh uninstall.sh setup-usb-access.sh scripts/path-guards.sh scripts/setup-terminal.sh bin/elgatoctl
   dependency-audit:
     runs-on: ubuntu-latest
     steps:

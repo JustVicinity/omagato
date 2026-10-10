@@ -4,6 +4,31 @@ import json
 from pathlib import Path
 
 ROWS = [
+ ('choose_running_app', 'Choose a running app', 'Laufende App auswählen', 'Choisir une application ouverte', 'Elegir una app abierta'),
+ ('saved_deck', 'Saved deck (offline)', 'Gespeichertes Deck (offline)', 'Deck enregistré (hors ligne)', 'Deck guardado (sin conexión)'),
+ ('reset_device', 'Use shared template again', 'Wieder Vorlage verwenden', 'Réutiliser le modèle commun', 'Volver a la plantilla compartida'),
+ ('reset_device_confirm', 'Remove this deck’s saved settings and use the shared template?', 'Gespeicherte Einstellungen dieses Decks entfernen und die Vorlage verwenden?', 'Supprimer les réglages de ce deck et utiliser le modèle commun ?', '¿Eliminar los ajustes de este deck y usar la plantilla compartida?'),
+
+ ('app_rules', 'Automatic page switching', 'Automatischer Seitenwechsel', 'Changement de page automatique', 'Cambio automático de página'),
+ ('ready_device', 'Ready', 'Bereit', 'Prêt', 'Listo'),
+ ('detected_only', 'Detected · setup needed', 'Erkannt · Einrichtung nötig', 'Détecté · configuration requise', 'Detectado · requiere configuración'),
+ ('shared_template', 'Shared template', 'Gemeinsame Vorlage', 'Modèle commun', 'Plantilla compartida'),
+ ('device_profile_hint', 'Each deck has its own keys, pages, brightness and dials. New decks inherit the shared template until their first change.', 'Jedes Deck hat eigene Tasten, Seiten, Helligkeit und Drehregler. Neue Decks übernehmen die Vorlage bis zur ersten Änderung.', 'Chaque deck possède ses touches, pages, luminosité et molettes. Les nouveaux decks héritent du modèle jusqu’à leur première modification.', 'Cada deck tiene sus teclas, páginas, brillo y diales. Los nuevos decks heredan la plantilla hasta el primer cambio.'),
+ ('app_page_hint', 'Optional: open this page when an app gains focus. Use its Hyprland window class. Other apps return to the first page. Click a rule to remove it.', 'Optional: Diese Seite öffnen, wenn eine App aktiv wird. Verwende ihre Hyprland-Fensterklasse. Andere Apps wechseln zur ersten Seite. Regel anklicken zum Entfernen.', 'Facultatif : ouvrir cette page quand une application devient active. Utilisez sa classe Hyprland. Les autres applications reviennent à la première page. Cliquez sur une règle pour la supprimer.', 'Opcional: abrir esta página al activar una app. Usa su clase de ventana Hyprland. Otras apps vuelven a la primera página. Pulsa una regla para eliminarla.'),
+ ('app_class', 'Window class, e.g. steam', 'Fensterklasse, z. B. steam', 'Classe de fenêtre, ex. steam', 'Clase de ventana, p. ej. steam'),
+ ('bind_page', 'Link page', 'Seite verknüpfen', 'Associer la page', 'Vincular página'),
+ ('setup_title', 'Setup & health', 'Einrichtung & Status', 'Configuration et état', 'Configuración y estado'),
+ ('setup_install_hint', 'Install or update the required components. Setup opens a terminal with progress and errors. Your assignments are kept.', 'Installiere oder aktualisiere die benötigten Komponenten. Ein Terminal zeigt Fortschritt und Fehler. Deine Belegungen bleiben erhalten.', 'Installez ou actualisez les composants requis. Un terminal affiche la progression et les erreurs. Vos affectations sont conservées.', 'Instala o actualiza los componentes necesarios. Un terminal muestra el progreso y los errores. Se conservan tus asignaciones.'),
+ ('setup_start_hint', 'The controller needs a restart or update. Setup can repair it.', 'Der Controller benötigt einen Neustart oder ein Update. Die Einrichtung kann ihn reparieren.', 'Le contrôleur nécessite un redémarrage ou une mise à jour. La configuration peut le réparer.', 'El controlador necesita reiniciarse o actualizarse. La configuración puede repararlo.'),
+ ('setup_ready', 'Components installed · controller running', 'Komponenten installiert · Controller läuft', 'Composants installés · contrôleur actif', 'Componentes instalados · controlador activo'),
+ ('setup_usb_hint', 'USB access is missing. Install the device access rule, then reconnect your deck. The terminal may ask for your password.', 'USB-Zugriff fehlt. Installiere die Zugriffsregel und verbinde das Deck erneut. Das Terminal fragt gegebenenfalls nach deinem Passwort.', 'L’accès USB manque. Installez la règle puis reconnectez le deck. Le terminal peut demander votre mot de passe.', 'Falta acceso USB. Instala la regla y reconecta el deck. El terminal puede solicitar tu contraseña.'),
+ ('setup_install', 'Install / repair', 'Installieren / reparieren', 'Installer / réparer', 'Instalar / reparar'),
+ ('setup_usb', 'Enable USB access', 'USB-Zugriff einrichten', 'Activer l’accès USB', 'Activar acceso USB'),
+ ('optional_tools', 'Missing optional tools', 'Fehlende optionale Werkzeuge', 'Outils facultatifs absents', 'Herramientas opcionales ausentes'),
+ ('touch_short', 'Touch strip · tap', 'Touch-Leiste · Tippen', 'Bande tactile · appui', 'Banda táctil · toque'),
+ ('touch_long', 'Touch strip · hold', 'Touch-Leiste · Halten', 'Bande tactile · appui long', 'Banda táctil · pulsación larga'),
+ ('touch_hint', 'Assign a tap and a hold action to each dial region. Swipe the strip to change pages.', 'Lege je Drehreglerbereich eine Aktion für Tippen und Halten fest. Wischen wechselt die Seite.', 'Attribuez des actions à chaque zone pour un appui court ou long. Balayez pour changer de page.', 'Asigna acciones de toque y pulsación larga a cada zona. Desliza para cambiar de página.'),
+
  ('title','OmaGato','OmaGato','OmaGato','OmaGato'),
  ('refresh','Refresh','Aktualisieren','Actualiser','Actualizar'),
  ('ready','Stream Deck ready','Stream Deck bereit','Stream Deck prêt','Stream Deck listo'),

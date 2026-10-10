@@ -87,6 +87,12 @@ def validate_config(data):
         for mapping in (keys, empty):
             if len(mapping) > 64 or any(not key.isdecimal() or not 0 <= int(key) < 64 for key in mapping):
                 raise ValueError('Ungültige Taste')
+        for surface in ('touch', 'touch_long'):
+            mapping = safety.object_value(page.get(surface, {}))
+            if len(mapping) > 8 or any(not key.isdecimal() or not 0 <= int(key) < 8 for key in mapping):
+                raise ValueError('Invalid touch region')
+            for action in mapping.values():
+                validate_action(action)
         for action in keys.values():
             validate_action(action)
         for spec in empty.values():
@@ -127,6 +133,8 @@ def validate_config(data):
             safety.number_value(settings[field], low, high)
     if 'flip' in settings and type(settings['flip']) is not bool:
         raise ValueError('Invalid Prompter flip setting')
+    from . import profiles
+    profiles.validate(data, validate_config)
 
 
 def palette():

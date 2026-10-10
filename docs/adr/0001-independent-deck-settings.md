@@ -1,0 +1,3 @@
+# Preserve the shared template and copy it on the first device edit
+
+Version-1 layouts remain the shared template; a deck receives an independent copy of its pages, brightness, dials, empty-key appearance and application rules on its first edit. Serial-derived opaque identities keep settings attached across USB port changes without exposing serials in status; drivers without a serial use their transport identity, so a port change can require reconfiguration. This preserves existing users’ layouts and avoids accidentally coupling two decks, at the cost of template edits no longer updating decks with saved profiles.

@@ -11,7 +11,7 @@ from pathlib import Path
 import threading
 import time
 
-from . import core, safety, visuals
+from . import core, safety, visuals, profiles, health
 from .actions import ActionQueue
 
 LOG = logging.getLogger(__name__)
@@ -84,6 +84,10 @@ class Worker:
     def __init__(self):
         self.decks = {}
         self.page = 0
+        self.device_pages = {}
+        self.device_ids = {}
+        self.focused_app = None
+        self.revision = health.runtime_revision()
         self.config = core.load_config()
         self.config_mtime = None
         self.theme_mtime = None
@@ -97,9 +101,10 @@ class Worker:
 
     def write_status(self):
         safety.private_dir(core.CONFIG_DIR)
-        data = {'running': True, 'updated': time.time(), 'decks': [
+        data = {'running': True, 'revision': self.revision, 'updated': time.time(), 'decks': [
             {'id': key, 'name': device_name(deck), 'keys': deck.key_count(),
-             'rows': deck.key_layout()[0], 'columns': deck.key_layout()[1], 'dials': deck.dial_count()}
+             'rows': deck.key_layout()[0], 'columns': deck.key_layout()[1], 'dials': deck.dial_count(), 'profile': self.device_ids[key],
+             'page': self.device_pages.get(key, 0), 'touch': bool(deck.is_touch())}
             for key, deck in self.decks.items()], 'page': self.page,
             'errors': list(self.errors)[-4:]}
         safety.atomic_write(STATUS_FILE, json.dumps(data).encode())
@@ -120,11 +125,16 @@ class Worker:
                     continue
                 deck.open()
                 deck.reset()
+                self.device_ids[ident] = profiles.identity(deck)
+                settings = self.settings(deck)
+                self.device_pages.setdefault(ident, 0)
                 if deck.is_visual():
-                    deck.set_brightness(self.config.get('brightness', 70))
+                    deck.set_brightness(self.settings(deck).get('brightness', 70))
                 deck.set_key_callback(self.on_key)
                 if deck.dial_count():
                     deck.set_dial_callback(self.on_dial)
+                if deck.is_touch():
+                    deck.set_touchscreen_callback(self.on_touch)
                 self.decks[ident] = deck
                 if deck.is_visual():
                     self.paint(deck)
@@ -138,41 +148,111 @@ class Worker:
             if ident not in current:
                 try:
                     self.decks.pop(ident).close()
+                    self.device_ids.pop(ident, None)
+                    self.device_pages.pop(ident, None)
                 except Exception:
                     pass
+
+    def settings(self, deck):
+        return profiles.effective(self.config, self.device_ids.get(deck.id(), ''))
 
     def paint(self, deck):
         if not deck.is_visual():
             return
         with self.lock:
-            keys = self.config['pages'][self.page].get('keys', {})
+            settings = self.settings(deck)
+            page = min(self.device_pages.get(deck.id(), 0), len(settings['pages']) - 1)
+            self.device_pages[deck.id()] = page
+            keys = settings['pages'][page].get('keys', {})
             colors = core.palette()
             for index in range(deck.key_count()):
                 action = keys.get(str(index), {})
                 try:
                     if action:
-                        deck.set_key_image(index, render(deck, action, colors, self.config))
+                        deck.set_key_image(index, render(deck, action, colors, settings))
                     else:
-                        spec = visuals.empty_for(self.config, self.page, index)
-                        deck.set_key_image(index, render(deck, {}, colors, self.config, spec))
+                        spec = visuals.empty_for(settings, page, index)
+                        deck.set_key_image(index, render(deck, {}, colors, settings, spec))
                 except Exception as exc:
                     self.record_error(f'Kachel {index + 1}: {exc}')
                     break
+            if deck.is_touch():
+                try:
+                    self.paint_touch(deck, settings, page, colors)
+                except Exception as exc:
+                    self.record_error(f'Touch strip: {exc}')
+
+    def paint_touch(self, deck, settings, page, colors):
+        from PIL import Image, ImageDraw, ImageFont
+        from StreamDeck.ImageHelpers import PILHelper
+        width, height = deck.touchscreen_image_format()['size']
+        count = max(1, deck.dial_count())
+        image = Image.new('RGB', (width, height), colors['background'])
+        draw = ImageDraw.Draw(image)
+        theme = visuals.resolve_theme(settings, colors)
+        for index in range(count):
+            left, right = index * width // count, (index + 1) * width // count
+            action = (settings['pages'][page].get('touch', {}).get(str(index))
+                      or settings['pages'][page].get('touch_long', {}).get(str(index), {}))
+            path = visuals.action_image(action, theme) if action else visuals.empty_image(settings.get('empty_default', visuals.DEFAULT_EMPTY), theme)
+            if path:
+                try:
+                    with visuals.open_image(path) as source:
+                        size = min(height, right - left)
+                        image.paste(source.convert('RGB').resize((size, size)), (left + (right - left - size) // 2, 0))
+                except (OSError, ValueError):
+                    pass
+            label = action.get('label', '')
+            if label and action.get('show_label', True):
+                draw.rectangle((left, height - 22, right, height), fill=colors['background'])
+                draw.text(((left + right) // 2, height - 20), str(label)[:24],
+                          font=ImageFont.load_default(size=14), anchor='mt', fill=colors['foreground'])
+            draw.line((left, 0, left, height), fill=colors['accent'])
+        deck.set_touchscreen_image(PILHelper.to_native_touchscreen_format(deck, image))
+
+    def on_touch(self, deck, event, value):
+        from StreamDeck.Devices.StreamDeck import TouchscreenEventType
+        with self.lock:
+            settings = self.settings(deck)
+            page = min(self.device_pages.get(deck.id(), 0), len(settings['pages']) - 1)
+            if event == TouchscreenEventType.DRAG:
+                delta = value.get('x_out', 0) - value.get('x', 0)
+                if abs(delta) >= 40:
+                    self.device_pages[deck.id()] = (page + (1 if delta < 0 else -1)) % len(settings['pages'])
+                    self.paint(deck)
+                return
+            width = deck.touchscreen_image_format()['size'][0]
+            count = max(1, deck.dial_count())
+            index = max(0, min(count - 1, int(value.get('x', 0)) * count // width))
+            surface = 'touch_long' if event == TouchscreenEventType.LONG else 'touch'
+            action = settings['pages'][page].get(surface, {}).get(str(index))
+            if action and action.get('type') == 'page':
+                try:
+                    target = int(action.get('value', 0))
+                except (TypeError, ValueError):
+                    return
+                if 0 <= target < len(settings['pages']):
+                    self.device_pages[deck.id()] = target
+                    self.paint(deck)
+                return
+            if action and not self.actions.submit(('touch', deck.id(), index, surface), lambda: self.execute(action, settings)):
+                self.record_error('Action queue is busy')
 
     def on_key(self, deck, key, pressed):
         if pressed:
             return
         with self.lock:
-            action = self.config['pages'][self.page].get('keys', {}).get(str(key))
+            settings = self.settings(deck)
+            page = min(self.device_pages.get(deck.id(), 0), len(settings['pages']) - 1)
+            action = settings['pages'][page].get('keys', {}).get(str(key))
             if not action:
                 return
             if action.get('type') == 'page':
                 try:
                     target = int(action.get('value', 0))
-                    if 0 <= target < len(self.config['pages']):
-                        self.page = target
-                        for item in self.decks.values():
-                            self.paint(item)
+                    if 0 <= target < len(settings['pages']):
+                        self.device_pages[deck.id()] = target
+                        self.paint(deck)
                 except (ValueError, TypeError):
                     pass
                 return
@@ -183,12 +263,12 @@ class Worker:
         if len(self.last_keys) > 512:
             self.last_keys.clear()
         self.last_keys[ident] = now
-        if not self.actions.submit(('key', *ident), lambda: self.execute(action)):
+        if not self.actions.submit(('key', *ident), lambda: self.execute(action, settings)):
             self.record_error('Action queue is busy')
 
     def on_dial(self, deck, index, event, value):
         from StreamDeck.Devices.StreamDeck import DialEventType
-        setting = self.config.get('dials', {}).get(str(index), {})
+        setting = self.settings(deck).get('dials', {}).get(str(index), {})
         mode = setting.get('mode', 'none')
         if mode == 'none':
             return
@@ -222,6 +302,29 @@ class Worker:
         if not self.actions.submit(ident, apply, max(-100, min(100, amount)), coalesce=is_turn):
             self.record_error('Action queue is busy')
 
+    def follow_app(self):
+        if not any(self.settings(deck).get('app_pages') for deck in self.decks.values()):
+            return
+        import subprocess
+        try:
+            result = subprocess.run(['hyprctl', 'activewindow', '-j'], capture_output=True,
+                                    text=True, timeout=1, check=True)
+            if len(result.stdout) > 65536:
+                return
+            app = json.loads(result.stdout).get('class', '')
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return
+        if app == self.focused_app:
+            return
+        self.focused_app = app
+        for deck in self.decks.values():
+            rules = self.settings(deck).get('app_pages', {})
+            if not rules:
+                continue
+            target = rules.get(app, 0)
+            self.device_pages[deck.id()] = target
+            self.paint(deck)
+
     def record_error(self, message):
         with self.lock:
             message = ''.join(char if char >= ' ' else ' ' for char in str(message)[:240])
@@ -231,9 +334,9 @@ class Worker:
                 LOG.warning('Controller error: %s', message)
                 self.last_error_log = now
 
-    def execute(self, action):
+    def execute(self, action, settings=None):
         try:
-            core.run_action(action, self.config)
+            core.run_action(action, settings or self.config)
         except Exception as exc:
             with self.lock:
                 self.record_error(str(exc))
@@ -261,6 +364,7 @@ class Worker:
                         if (mtime != self.config_mtime or theme_mtime != self.theme_mtime
                                 or name_mtime != self.theme_name_mtime or background_signature != self.background_signature):
                             self.config = core.load_config()
+                            self.focused_app = None
                             self.config_mtime = mtime
                             self.theme_mtime = theme_mtime
                             self.theme_name_mtime = name_mtime
@@ -268,9 +372,10 @@ class Worker:
                             self.page = min(self.page, len(self.config['pages']) - 1)
                             for deck in self.decks.values():
                                 if deck.is_visual():
-                                    deck.set_brightness(self.config.get('brightness', 70))
+                                    deck.set_brightness(self.settings(deck).get('brightness', 70))
                                     self.paint(deck)
                         self.scan()
+                        self.follow_app()
                         self.write_status()
                     except Exception as exc:
                         self.record_error(str(exc))

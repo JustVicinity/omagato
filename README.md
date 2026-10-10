@@ -9,6 +9,7 @@ Control your Elgato setup from the Omarchy bar. OmaGato brings Stream Deck keys,
 ## Highlights
 
 - Stream Deck: Click + to assign an installed app or system action to a key. Add scripts, websites, media controls, macros, and pages. Right click a key to clear it with confirmation.
+- Multiple decks: Select a device to edit its own layout, brightness and dials. New devices start with your shared template. Link pages to active apps; on touch-enabled decks, assign tap/hold actions and swipe between pages.
 - Your look: Choose from four Omarchy inspired icon themes, use your own images, and style empty keys. The interface follows your system language or a language you choose.
 - More Elgato gear: Control compatible lights, adjust camera controls exposed by Linux, manage audio levels, and run a native Prompter view. [OpenXLR](https://github.com/emaspa/openxlr) adds controls for supported Wave and XLR devices.
 
@@ -18,6 +19,8 @@ Control your Elgato setup from the Omarchy bar. OmaGato brings Stream Deck keys,
 omarchy plugin add https://github.com/JustVicinity/omagato
 ~/.config/omarchy/plugins/io.github.justvicinity.omagato/install.sh
 ```
+
+Alternatively, open OmaGato and choose **Install / repair** in **Setup & health**. It opens a terminal showing progress; **Enable USB access** offers the USB rule when needed. No administrator access is requested until you choose that step.
 
 The installer creates a Python environment and starts OmaGato's user service. You need Python 3 with `venv` and `pip`; Python packages are listed in `requirements.txt`. Some functions use optional system tools: `v4l2-ctl` for cameras, `avahi-browse` for light discovery, `pw-dump` and `wpctl` for audio, and `rsvg-convert` for custom SVG app icons. Media keys use `playerctl` when available or the system MPRIS bus. A physical Prompter needs a working display connection under Hyprland.
 
@@ -30,6 +33,18 @@ If a Stream Deck is detected but cannot be opened, run `./setup-usb-access.sh` f
 After `omarchy plugin update io.github.justvicinity.omagato`, run `install.sh` again to update the Python environment and service.
 
 To remove OmaGato, run `uninstall.sh` in the plugin directory, then `omarchy plugin remove io.github.justvicinity.omagato`. Your key layouts and imported icons remain in `~/.config/omarchy-elgato/`. Use `uninstall.sh --purge-config` if you also want to delete them.
+
+## Using multiple decks
+
+Choose a deck in the Stream Deck tab. Its first change copies the shared template into an independent device profile. Later template edits affect only decks without a saved profile. Saved decks remain editable while disconnected. **Use shared template again** removes only the selected deck’s settings after confirmation. Language and icon theme remain shared across the panel. Settings follow a deck’s serial identity; without a serial, they follow its USB transport identity.
+
+To switch pages automatically, select a running app or enter its Hyprland window class (for example `steam`) and choose **Link page** on the desired page. Other apps return that deck to the first page. Click a rule to remove it. Use `hyprctl activewindow -j` to find a window class. Touch-enabled devices offer separate tap and hold assignments per dial region; swipe left/right to change pages.
+
+## Troubleshooting
+
+The device overview distinguishes **Ready** from **Detected · setup needed**. Only ready devices offer controls. Setup checks required Python packages, the controller and USB access; optional tool names explain which integrations need extra packages.
+
+Run `bin/elgatoctl diagnostics` from the plugin directory for a small report suitable for an issue. It includes product names/IDs, control counts and setup checks; it excludes serials, personal paths, assignments and error messages. Nothing is uploaded automatically. See the [hardware testing checklist](docs/hardware-testing.md).
 
 ## Device support
 
