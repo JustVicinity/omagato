@@ -43,5 +43,5 @@ QML
 # shellcheck disable=SC2046
 g++ -std=c++17 -fPIC "$source_dir/tests/native/clipboard_editor.cpp" -o "$qa_dir/probe" \
   $(pkg-config --cflags --libs Qt6Quick Qt6Qml Qt6Gui Qt6QuickControls2 Qt6Test)
-QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME= QT_QUICK_CONTROLS_STYLE=Basic \
+QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME='' QT_QUICK_CONTROLS_STYLE=Basic \
   "$qa_dir/probe" "$qa_dir" "$@"
