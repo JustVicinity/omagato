@@ -31,7 +31,7 @@ if [[ "$source_dir" != "$target" ]]; then
   # Theme artwork is generated and owned by this plugin. Clear older files
   # (including formats no longer shipped) before installing the current pack.
   rm -rf "$target/assets/icon-themes"
-  for item in ActionChip.qml AppPageRules.qml DeckProfilePicker.qml SetupPanel.qml BarWidget.qml CameraPreview.qml IconGallery.qml PickerRow.qml UiField.qml UiSelect.qml \
+  for item in ActionChip.qml AppPageRules.qml DeckProfilePicker.qml SetupPanel.qml BarWidget.qml CameraPreview.qml IconGallery.qml PickerRow.qml UiField.qml UiTextArea.qml ClipboardReader.qml SafeEditMenu.qml SafeEditing.js UiSelect.qml \
               PrompterService.qml TeleprompterOverlay.qml LICENSE README.md SECURITY.md CHANGELOG.md manifest.json \
               requirements.txt install.sh setup-usb-access.sh uninstall.sh udev bin elgato assets scripts docs; do
     cp -a "$source_dir/$item" "$target/"

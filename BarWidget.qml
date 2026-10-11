@@ -840,7 +840,7 @@ Panel {
               placeholderText: root.t(root.actionTypes[Math.max(0, actionType.currentIndex)].hint)
               onTextEdited: root.editorDirty = true
             }
-            TextArea {
+            UiTextArea {
               id: macroField
               width: parent.width
               height: Style.space(85)
@@ -1211,7 +1211,7 @@ Panel {
             ScrollView {
               width: parent.width
               height: Style.space(190)
-              TextArea {
+              UiTextArea {
                 id: scriptEditor
                 wrapMode: TextEdit.Wrap
                 placeholderText: root.t("prompter_script_placeholder")

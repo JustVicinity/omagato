@@ -40,6 +40,10 @@ Choose a deck in the Stream Deck tab. Its first change copies the shared templat
 
 To switch pages automatically, select a running app or enter its Hyprland window class (for example `steam`) and choose **Link page** on the desired page. Other apps return that deck to the first page. Click a rule to remove it. Use `hyprctl activewindow -j` to find a window class. Touch-enabled devices offer separate tap and hold assignments per dial region; swipe left/right to change pages.
 
+## Text editing
+
+Type normally, use Ctrl+C/Ctrl+X/Ctrl+V, or right click for editing actions. Paste is read by a separate helper and limited to 60 KiB and two seconds; oversized or stalled offers are discarded. `wl-paste` from `wl-clipboard` is required for paste. Native middle-click paste and drop insertion are disabled. Native IME composition is temporarily unavailable in guarded editors; Unicode keyboard text and Unicode paste are supported.
+
 ## Troubleshooting
 
 The device overview distinguishes **Ready** from **Detected · setup needed**. Only ready devices offer controls. Setup checks required Python packages, the controller and USB access; optional tool names explain which integrations need extra packages.

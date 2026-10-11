@@ -28,8 +28,20 @@ jobs:
             --index-url https://pypi.org/simple --require-hashes \
             --only-binary=:all: -r requirements.txt
       - run: python -m unittest discover -s tests
-      - run: bash -n install.sh uninstall.sh setup-usb-access.sh scripts/path-guards.sh scripts/setup-terminal.sh
-      - run: shellcheck install.sh uninstall.sh setup-usb-access.sh scripts/path-guards.sh scripts/setup-terminal.sh bin/elgatoctl
+      - run: bash -n install.sh uninstall.sh setup-usb-access.sh scripts/path-guards.sh scripts/setup-terminal.sh scripts/test-clipboard-ui.sh
+      - run: shellcheck install.sh uninstall.sh setup-usb-access.sh scripts/path-guards.sh scripts/setup-terminal.sh scripts/test-clipboard-ui.sh bin/elgatoctl
+  clipboard-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ pkg-config qt6-base-dev qt6-declarative-dev \
+            qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window \
+            qml6-module-qtquick-templates qml6-module-qtqml qml6-module-qtqml-workerscript
+      - run: bash scripts/test-clipboard-ui.sh
   dependency-audit:
     runs-on: ubuntu-latest
     steps:

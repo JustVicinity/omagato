@@ -92,7 +92,7 @@ def main(argv=None):
     parser.add_argument('--local', action='store_true')
     parser.add_argument('--quick', action='store_true')
     sub = parser.add_subparsers(dest='command', required=True)
-    for name in ('state', 'apps', 'discover-lights', 'cameras', 'daemon', 'start', 'prompter-state', 'diagnostics', 'reset-device'):
+    for name in ('state', 'apps', 'discover-lights', 'cameras', 'daemon', 'start', 'prompter-state', 'diagnostics', 'reset-device', 'clipboard'):
         sub.add_parser(name)
     item = sub.add_parser('app-page')
     item.add_argument('app')
@@ -175,6 +175,14 @@ def main(argv=None):
     item.add_argument('value')
     args = parser.parse_args(argv)
     try:
+        if args.command == 'clipboard':
+            from .clipboard import read_text
+            try:
+                result = {'text': read_text()}
+            except (OSError, ValueError):
+                result = {'error': 'clipboard_unavailable'}
+            print(json.dumps(result, ensure_ascii=True))
+            return 0 if 'text' in result else 1
         if args.device:
             profiles.validate_id(args.device)
         if args.command == 'diagnostics':

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.justvicinity.omagato",
   "name": "OmaGato",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "author": "JustVicinity and contributors",
   "license": "MIT",
   "description": "Customize Stream Deck keys and control compatible Elgato lights, cameras, audio, and Prompter from a panel that follows your Omarchy theme.",

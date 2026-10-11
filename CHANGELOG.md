@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.1 (2026-10-11)
+
+- Prevent automatic Qt clipboard payload reads in every plugin-owned text field and both multiline editors.
+- Route explicit paste through an isolated reader with a 60 KiB limit and two-second total deadline. Native middle-button paste is disabled.
+- Add native Qt editor regression tests and streaming-provider tests, including a new CI UI gate.
+- Native IME composition is temporarily unavailable in guarded editors; Unicode typing and bounded Unicode paste remain supported.
+
 ## 0.8.0 — 2026-10-10
 
 - Separate device detection from readiness; add guided installation/repair and USB access checks.
